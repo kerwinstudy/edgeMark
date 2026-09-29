@@ -912,6 +912,22 @@ function hint(text, cls) {
 const ICON_RENAME = 'M11.6 2.4l2 2L5.2 12.8l-2.7.7.7-2.7z'
 const ICON_DELETE = 'M4.2 4.2l7.6 7.6M11.8 4.2l-7.6 7.6'
 
+// 目录树图标。用 SVG 而不是 CSS 拼方块 —— 14px 下 SVG 边缘清晰得多
+const ICON_FOLDER =
+  '<path d="M1.7 4.4c0-.7.5-1.2 1.2-1.2h3.2l1.4 1.8h6.1c.7 0 1.2.5 1.2 1.2v6.4c0 .7-.5 1.2-1.2 1.2H2.9c-.7 0-1.2-.5-1.2-1.2z" fill="currentColor"/>'
+const ICON_FILE =
+  '<path d="M9.3 1.7H4.8c-.9 0-1.6.7-1.6 1.6v9.4c0 .9.7 1.6 1.6 1.6h6.4c.9 0 1.6-.7 1.6-1.6V5.3z" fill="none" stroke="currentColor" stroke-width="1.35" stroke-linejoin="round"/><path d="M9.3 1.7v3.6h3.5" fill="none" stroke="currentColor" stroke-width="1.35" stroke-linejoin="round"/>'
+
+function treeIcon(type) {
+  const span = document.createElement('span')
+  span.className = `tree__icon tree__icon--${type}`
+  span.innerHTML =
+    `<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">` +
+    (type === 'dir' ? ICON_FOLDER : ICON_FILE) +
+    '</svg>'
+  return span
+}
+
 function iconButton(title, pathD) {
   const btn = document.createElement('button')
   btn.type = 'button'
@@ -927,7 +943,7 @@ async function renderDir(dirPath, container, depth) {
   const data = await api.get('/api/tree', { dir: dirPath })
 
   if (!data.entries.length) {
-    container.appendChild(hint('（空）', 'tree__empty'))
+    container.appendChild(hint('这个文件夹里没有 Markdown 文件', 'tree__empty'))
     return
   }
 
@@ -943,7 +959,7 @@ function createRow(entry, depth) {
   const row = document.createElement('div')
   row.className = 'tree__row'
   row.dataset.path = entry.path
-  row.style.paddingLeft = `${8 + depth * 14}px`
+  row.style.paddingLeft = `${4 + depth * 13}px`
   if (entry.type === 'file') row.dataset.filePath = entry.path
   // 可拖拽：拖到别的目录上就是移动
   row.draggable = true
@@ -952,8 +968,7 @@ function createRow(entry, depth) {
   arrow.className = 'tree__arrow'
   row.appendChild(arrow)
 
-  const icon = document.createElement('span')
-  icon.className = `tree__icon tree__icon--${entry.type}`
+  const icon = treeIcon(entry.type)
   row.appendChild(icon)
 
   const name = document.createElement('span')

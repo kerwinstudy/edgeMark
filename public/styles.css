@@ -24,6 +24,9 @@
   --danger-fg: #82071e;
   --dirty: #bc4c00;
 
+  /* 目录树里的文件夹图标 */
+  --icon-folder: #d9a441;
+
   /* AI 修改卡片 */
   --ok-bg: #eaf7ee;
   --ok-fg: #1a7f37;
@@ -57,6 +60,8 @@
   --danger-fg: #ff9b95;
   --dirty: #d29922;
 
+  --icon-folder: #d4a72c;
+
   --ok-bg: #12261a;
   --ok-fg: #3fb950;
   --add-bg: #12261a;
@@ -66,6 +71,15 @@
 
 * {
   box-sizing: border-box;
+}
+
+/* 键盘导航时给出清晰的焦点环；鼠标点击不显示（:focus-visible 的默认行为） */
+button:focus-visible,
+input:focus-visible,
+textarea:focus-visible,
+[tabindex]:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
 }
 
 html,
@@ -202,7 +216,7 @@ body {
 .tabbar {
   flex: 0 0 auto;
   display: flex;
-  height: 34px;
+  height: 36px;
   border-bottom: 1px solid var(--border);
   background: var(--bg-soft);
   overflow: hidden;
@@ -227,8 +241,9 @@ body {
   gap: 6px;
   flex: 0 0 auto;
   max-width: 220px;
-  padding: 0 6px 0 10px;
+  padding: 0 8px 0 12px;
   border-right: 1px solid var(--border);
+  font-size: 12.5px;
   color: var(--text-dim);
   cursor: pointer;
   user-select: none;
@@ -237,11 +252,13 @@ body {
 
 .tab:hover {
   background: var(--hover);
+  color: var(--text);
 }
 
 .tab.is-active {
   background: var(--bg);
   color: var(--text);
+  font-weight: 600;
   box-shadow: inset 0 2px 0 var(--accent);
 }
 
@@ -337,8 +354,11 @@ body {
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  padding: 4px 6px 4px 10px;
-  font-size: 12px;
+  height: 34px;
+  padding: 0 6px 0 12px;
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
   color: var(--text-dim);
   border-bottom: 1px solid var(--border);
   background: var(--bg-soft);
@@ -378,25 +398,36 @@ body {
 .tree {
   flex: 1 1 auto;
   overflow: auto;
-  padding: 4px 0 24px;
+  padding: 6px 0 28px;
   user-select: none;
 }
 
+/*
+ * 行高、圆角、左右留白对齐现代编辑器的文件树：
+ * 整行左右各缩进 6px，鼠标悬停是一块圆角高亮，而不是贯穿整行的色带。
+ * 层级缩进由 JS 写在内联 padding-left 上。
+ */
 .tree__row {
   display: flex;
   align-items: center;
-  gap: 4px;
-  padding: 2px 8px 2px 0;
+  gap: 6px;
+  min-height: 25px;
+  margin: 1px 6px;
+  padding: 0 6px;
+  border-radius: 5px;
+  font-size: 13px;
+  line-height: 1.5;
   white-space: nowrap;
   cursor: pointer;
 }
 
 .tree__row:hover {
-  background: var(--accent-soft);
+  background: var(--hover);
 }
 
 .tree__row.is-active {
   background: var(--accent-soft);
+  color: var(--accent);
   font-weight: 600;
 }
 
@@ -415,7 +446,8 @@ body {
   opacity: 0;
 }
 
-.tree__row:hover .tree__actions {
+.tree__row:hover .tree__actions,
+.tree__row:focus-within .tree__actions {
   opacity: 1;
 }
 
@@ -425,11 +457,11 @@ body {
 }
 
 .tree__arrow {
-  flex: 0 0 14px;
-  width: 14px;
+  flex: 0 0 12px;
+  width: 12px;
   text-align: center;
   color: var(--text-dim);
-  font-size: 10px;
+  font-size: 9px;
   transition: transform 0.12s ease;
 }
 
@@ -437,48 +469,47 @@ body {
   transform: rotate(90deg);
 }
 
+/* 图标是 SVG（见 app.js 的 treeIcon），这里只管尺寸和配色 */
 .tree__icon {
   flex: 0 0 auto;
-  position: relative;
-  width: 12px;
-  height: 12px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
 }
 
-/* 目录：一个带“页签”的方块 */
 .tree__icon--dir {
-  border-radius: 2px;
-  background: #d0a24c;
-  margin-top: 1px;
+  color: var(--icon-folder);
 }
 
-.tree__icon--dir::before {
-  content: '';
-  position: absolute;
-  top: -3px;
-  left: 0;
-  width: 6px;
-  height: 4px;
-  border-radius: 2px 2px 0 0;
-  background: #d0a24c;
-}
-
-/* 文件：一个带折角的纸片 */
 .tree__icon--file {
-  border: 1.5px solid #8c959f;
-  border-radius: 1px;
-  background: var(--surface);
+  color: var(--text-dim);
+  opacity: 0.85;
 }
 
+.tree__row.is-active .tree__icon--file {
+  color: var(--accent);
+  opacity: 1;
+}
+
+/*
+ * flex:1 + min-width:0 缺一不可 —— 没有 min-width:0，flex 项的默认最小尺寸是内容宽度，
+ * 长文件名不会走省略号，而是把右侧的按钮顶出侧栏。
+ */
 .tree__name {
+  flex: 1 1 auto;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
 .tree__empty,
 .tree__error {
-  padding: 6px 12px;
+  padding: 20px 18px;
   color: var(--text-dim);
-  font-size: 12px;
+  font-size: 12.5px;
+  line-height: 1.7;
 }
 
 .tree__error {
@@ -1100,11 +1131,11 @@ body {
 
 .tree__row.is-drop-target {
   background: var(--accent-soft);
-  box-shadow: inset 0 0 0 1px var(--accent);
+  box-shadow: inset 0 0 0 1.5px var(--accent);
 }
 
 .tree__row.is-dragging {
-  opacity: 0.45;
+  opacity: 0.4;
 }
 
 /* 回答里能对上原文的行内代码：可点击跳转 */
