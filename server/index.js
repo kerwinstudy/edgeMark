@@ -196,38 +196,173 @@ const exists = (p) =>
 
 const escapeRegExp = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 
-/**
- * 移入系统废纸篓。
- *
- * 只做同卷 rename —— 跨卷（比如根目录在外接硬盘上）会失败，这时明确报错，
- * **绝不退化成永久删除**。宁可删不掉，也不能把用户的数据真删了。
- */
-async function moveToTrash(abs) {
+// ---------------------------------------------------------------- 平台差异
+
+const IS_MAC = process.platform === 'darwin'
+const IS_WINDOWS = process.platform === 'win32'
+const IS_LINUX = process.platform === 'linux'
+
+/** 跑一个外部命令，带超时，避免卡在交互式提示上 */
+function run(command, args, timeoutMs = 10000) {
+  return new Promise((resolve, reject) => {
+    execFile(command, args, { timeout: timeoutMs }, (err, stdout, stderr) => {
+      if (err) reject(new Error(String(stderr || err.message).trim()))
+      else resolve(stdout)
+    })
+  })
+}
+
+/** 在 dir 下找一个不冲突的名字：重名时加时间戳，同秒再删同一个名字时加序号 */
+async function uniquePath(dir, name) {
+  const candidate = path.join(dir, name)
+  if (!(await exists(candidate))) return candidate
+
+  const ext = path.extname(name)
+  const stem = path.basename(name, ext)
+  const stamp = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 14)
+
+  let next = path.join(dir, `${stem} ${stamp}${ext}`)
+  let n = 1
+  while (await exists(next)) {
+    next = path.join(dir, `${stem} ${stamp}-${n++}${ext}`)
+  }
+  return next
+}
+
+/** PowerShell 单引号字符串：内部的单引号写成两个 */
+const psQuote = (s) => `'${String(s).replace(/'/g, "''")}'`
+
+/** 移入废纸篓（macOS） */
+async function trashOnMac(abs) {
   const trashDir = path.join(os.homedir(), '.Trash')
-  const trashStat = await fsp.stat(trashDir).catch(() => null)
-  if (!trashStat || !trashStat.isDirectory()) {
-    throw new HttpError(500, `找不到废纸篓目录：${trashDir}`)
+  const stat = await fsp.stat(trashDir).catch(() => null)
+  if (!stat || !stat.isDirectory()) throw new HttpError(500, `找不到废纸篓目录：${trashDir}`)
+
+  const target = await uniquePath(trashDir, path.basename(abs))
+  try {
+    await fsp.rename(abs, target)
+  } catch (err) {
+    if (err.code === 'EXDEV') {
+      throw new HttpError(400, '这个位置不在系统盘上，无法移入废纸篓。请手动删除。')
+    }
+    throw new HttpError(500, `移入废纸篓失败：${err.message}`)
+  }
+  return path.basename(target)
+}
+
+/**
+ * 移入回收站（Windows）。
+ *
+ * Node 没有内置的回收站 API，只能借 .NET 的 Microsoft.VisualBasic.FileIO，
+ * 它底层就是 SHFileOperation，会真正进回收站（可还原）。
+ * `-NonInteractive` 防止 PowerShell 卡在交互提示上，外加超时兜底。
+ */
+async function trashOnWindows(abs) {
+  const stat = await fsp.stat(abs)
+  const method = stat.isDirectory() ? 'DeleteDirectory' : 'DeleteFile'
+
+  const script =
+    'Add-Type -AssemblyName Microsoft.VisualBasic; ' +
+    `[Microsoft.VisualBasic.FileIO.FileSystem]::${method}(${psQuote(abs)}, 'OnlyErrorDialogs', 'SendToRecycleBin')`
+
+  try {
+    await run('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', script])
+  } catch (err) {
+    throw new HttpError(500, `移入回收站失败：${err.message}`)
   }
 
-  // 重名时加时间戳后缀，绝不覆盖废纸篓里已有的东西
-  const ext = path.extname(abs)
-  const base = path.basename(abs, ext)
-  let target = path.join(trashDir, path.basename(abs))
-  if (await exists(target)) {
-    const stamp = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 14)
-    target = path.join(trashDir, `${base} ${stamp}${ext}`)
-  }
+  // 有的环境里这个调用会「静默失败」，所以再确认一次
+  if (await exists(abs)) throw new HttpError(500, '移入回收站后文件仍然存在，操作可能没有生效')
+
+  return path.basename(abs)
+}
+
+/**
+ * 移入回收站（Linux，按 FreeDesktop 规范）。
+ *
+ * 除了把文件挪到 ~/.local/share/Trash/files/，还要在 info/ 下写一个 .trashinfo
+ * 记录原始路径 —— 没有它，文件管理器就不知道能还原到哪。
+ */
+async function trashOnLinux(abs) {
+  const dataHome = process.env.XDG_DATA_HOME || path.join(os.homedir(), '.local', 'share')
+  const filesDir = path.join(dataHome, 'Trash', 'files')
+  const infoDir = path.join(dataHome, 'Trash', 'info')
+
+  await fsp.mkdir(filesDir, { recursive: true })
+  await fsp.mkdir(infoDir, { recursive: true })
+
+  const target = await uniquePath(filesDir, path.basename(abs))
+  const name = path.basename(target)
 
   try {
     await fsp.rename(abs, target)
   } catch (err) {
     if (err.code === 'EXDEV') {
-      throw new HttpError(400, '这个位置不在系统盘上，无法移入废纸篓。请用访达手动删除。')
+      throw new HttpError(400, '这个位置不在同一分区，无法移入回收站。请手动删除。')
     }
-    throw new HttpError(500, `移入废纸篓失败：${err.message}`)
+    throw new HttpError(500, `移入回收站失败：${err.message}`)
   }
 
-  return path.basename(target)
+  // 规范要求 Path 做百分号编码（保留 /）
+  const encoded = abs.split('/').map(encodeURIComponent).join('/')
+  const stamp = new Date().toISOString().replace(/\.\d+Z$/, '')
+  await fsp.writeFile(path.join(infoDir, `${name}.trashinfo`), `[Trash Info]\nPath=${encoded}\nDeletionDate=${stamp}\n`, 'utf8')
+
+  return name
+}
+
+/**
+ * 移入系统废纸篓 / 回收站。
+ *
+ * **绝不退化成永久删除**：跨卷、命令失败、平台不支持，一律明确报错。
+ * 宁可删不掉，也不能把用户的数据真删了。
+ */
+async function moveToTrash(abs) {
+  if (IS_MAC) return trashOnMac(abs)
+  if (IS_WINDOWS) return trashOnWindows(abs)
+  if (IS_LINUX) return trashOnLinux(abs)
+  throw new HttpError(400, `不支持的平台：${process.platform}，请手动删除`)
+}
+
+/**
+ * 在系统文件管理器里定位文件。
+ *
+ * Windows 的 explorer 即使成功也常返回非 0，所以不看退出码；
+ * Linux 优先用 FileManager1 的 D-Bus 接口（能选中文件），不行再退回打开所在目录。
+ */
+async function revealInFileManager(abs) {
+  if (IS_MAC) {
+    await run('open', ['-R', abs])
+    return
+  }
+
+  if (IS_WINDOWS) {
+    await new Promise((resolve) => {
+      execFile('explorer.exe', [`/select,${abs}`], () => resolve())
+    })
+    return
+  }
+
+  if (IS_LINUX) {
+    const uri = `file://${abs.split('/').map(encodeURIComponent).join('/')}`
+    try {
+      await run('dbus-send', [
+        '--session',
+        '--dest=org.freedesktop.FileManager1',
+        '--type=method_call',
+        '/org/freedesktop/FileManager1',
+        'org.freedesktop.FileManager1.ShowItems',
+        `array:string:${uri}`,
+        'string:'
+      ])
+      return
+    } catch {
+      await run('xdg-open', [path.dirname(abs)])
+      return
+    }
+  }
+
+  throw new HttpError(400, `不支持的平台：${process.platform}`)
 }
 
 /** 新建时的名称校验：目录树不显示隐藏文件，所以不让建 */
@@ -680,17 +815,16 @@ const api = {
 
   // ------------------------------------------------------------ 在访达中定位
 
-  /** 在访达中定位该文件（仅 macOS） */
+  /** 在系统文件管理器里定位该文件 */
   async 'POST /api/reveal'(body) {
-    if (process.platform !== 'darwin') {
-      throw new HttpError(400, '这个功能目前只在 macOS 上可用')
-    }
     const abs = resolveInsideRoot(body.path)
     if (!(await exists(abs))) throw new HttpError(404, `不存在：${toRelative(abs)}`)
 
-    execFile('open', ['-R', abs], (err) => {
-      if (err) console.warn('[edgeMark] 访达定位失败：', err.message)
-    })
+    try {
+      await revealInFileManager(abs)
+    } catch (err) {
+      throw new HttpError(500, `无法在文件管理器里定位：${err.message}`)
+    }
     return { ok: true }
   },
 

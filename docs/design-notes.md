@@ -167,13 +167,27 @@ Vditor 的快捷键字符串里那个 `⌘` 表示「**平台的主修饰键**�
 
 新建的位置跟随**最后点选的目录**（或最后打开文件所在的目录），对话框里会写明具体位置。
 
-**删除一律移入 macOS 废纸篓，绝不永久删除。** 只做同卷 `rename`；如果根目录在外接硬盘等
-其他卷上会失败，这时**明确报错而不是退化成硬删**。废纸篓里已有同名文件时会加时间戳后缀，
-不覆盖。
+**删除一律移入系统回收站，绝不永久删除。** 各平台的做法：
+
+| 平台 | 做法 |
+| --- | --- |
+| macOS | `~/.Trash` 同卷 `rename` |
+| Windows | PowerShell 调 .NET 的 `Microsoft.VisualBasic.FileIO.FileSystem`，底层是 `SHFileOperation` |
+| Linux | 按 FreeDesktop 规范写 `~/.local/share/Trash/{files,info}`，并生成 `.trashinfo` |
+
+跨卷、命令失败、平台不支持，一律**明确报错**而不是退化成硬删。回收站里已有同名文件时
+加时间戳后缀，同秒内再冲突就加序号（`uniquePath`）。
+
+Linux 那份 `.trashinfo` 是必须的——没有它，文件管理器不知道能还原到哪。`Path` 字段按
+规范做了百分号编码。
 
 不允许创建以 `.` 开头的名称——目录树本来就不显示隐藏文件，建了会「消失」，所以直接拒绝。
 
 拖拽时前端会拦掉「把目录拖进自己或自己的子孙里」，服务端也会按路径规则拒绝。
+
+**定位文件**：macOS 用 `open -R`；Windows 用 `explorer /select,`（explorer 即使成功也常
+返回非 0，所以不看退出码）；Linux 优先用 `org.freedesktop.FileManager1.ShowItems`
+的 D-Bus 接口（能选中文件），失败再退回 `xdg-open` 打开所在目录。
 
 ### 自动保存与外部改动
 

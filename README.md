@@ -87,16 +87,18 @@ EDGEMARK_CONFIG=/tmp/test-config.json npm start
 
 ## 平台支持
 
-这个工具目前**以 macOS 为主**，除快捷键外还有几处是 macOS 专属：
+| 功能 | macOS | Windows | Linux |
+| --- | --- | --- | --- |
+| 编辑 / 搜索 / 图片 / AI / 导出 | ✅ | ✅ | ✅ |
+| 删除 → 回收站 | ✅ `~/.Trash` | ✅ 系统回收站 | ✅ FreeDesktop 规范 |
+| 在文件管理器里定位 | ✅ 访达 | ✅ 资源管理器 | ✅ 文件管理器 |
+| 双击启动 | ✅ `start.command` | — 用 `npm start` | — 用 `npm start` |
 
-| 功能 | macOS | Windows / Linux |
-| --- | --- | --- |
-| 编辑、搜索、图片、AI、导出 | ✅ | ✅ |
-| `start.command` 双击启动 | ✅ | ❌（用 `npm start`） |
-| 删除 → 废纸篓 | ✅ `~/.Trash` | ❌ 会报错 |
-| 右键「在访达中显示」 | ✅ | ❌ 会报错 |
+删除**在任何平台上都不会永久删除**：跨卷、命令失败、平台不支持，一律明确报错。
 
-Windows 下需要的是「回收站 API」和「资源管理器定位」，目前没做。
+> ⚠️ 开发环境是 macOS，所以 **Windows 和 Linux 的分支没有实机验证过**，
+> 只做了逻辑与格式层面的测试（Linux 的回收站布局按 FreeDesktop 规范逐项核对过，
+> Windows 的 PowerShell 参数转义也测了）。如果你在对应系统上遇到问题，欢迎提 issue。
 
 ## 说明
 
