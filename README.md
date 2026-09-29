@@ -129,7 +129,9 @@ mermaid / plantuml / echarts 等图表渲染库。这里把 `cdn` 指向 `/vendo
 | DELETE | `/api/entry` | 删除，`{ path }` —— **移入废纸篓，不做永久删除** |
 | POST | `/api/reveal` | 在访达中定位，`{ path }`（仅 macOS） |
 | GET | `/api/search?q=&regex=&case=&limit=` | 全文搜索，返回 `{ matches, files, truncated }` |
-| POST | `/api/upload` | 接收图片（multipart），存到文档旁的 `assets/`，返回 Vditor 约定格式 |
+| GET | `/api/image-dir?dir=<rel>` | 读该目录生效的图片保存目录 |
+| POST | `/api/image-dir` | 设置，`{ scope: 'global'\|'dir', dir?, name }`。`name` 为空=清除覆盖 |
+| POST | `/api/upload` | 接收图片（multipart），存到文档旁的图片目录，返回 Vditor 约定格式 |
 | GET | `/api/watch` | 订阅「已打开文件被外部改动」（SSE 长连接） |
 | POST | `/api/watch` | 设置监视清单，`{ paths: [...] }` |
 | GET | `/api/routes` | 列出服务端实际注册的接口（前端启动自检用） |
@@ -154,7 +156,7 @@ mermaid / plantuml / echarts 等图表渲染库。这里把 `cdn` 指向 `/vendo
 ### 本地图片
 
 **插入图片**（工具栏的图片按钮、拖拽、粘贴）会把图片存成**文件**，写在文档旁边的
-`assets/` 目录里，markdown 里插入相对路径，例如：
+图片目录里，markdown 里插入相对路径，例如：
 
 ```markdown
 ![截图](assets/截图-20260929061329.png)
@@ -162,6 +164,19 @@ mermaid / plantuml / echarts 等图表渲染库。这里把 `cdn` 指向 `/vendo
 
 文件名是 `原名-时间戳.ext`，重名时再加序号，不覆盖已有文件。只接受图片类型，
 单张上限 20MB。
+
+**图片保存目录可以在「···」菜单 →「图片保存目录」里改**，支持两级：
+
+- **全局默认**（默认 `assets`）—— 所有目录都用它
+- **按目录覆盖** —— 给某个目录设一次，**它下面的子目录都跟着走**；
+  更具体的覆盖优先。清除覆盖后回退到最近的祖先覆盖，再回退到全局默认
+
+设置存在服务端配置（`~/.edgemark/config.json` 的 `imageDir`），因为它决定的是文件
+写到哪，属于文件系统的事；存服务端也让所有浏览器看到的设置一致。
+
+> 为什么需要这个：`assets` 是 Typora / Obsidian / 很多静态站生成器的主流约定，
+> 好处是可预期。但如果某个目录里**本来就有同名的 `assets` 目录**（比如放构建产物的），
+> 插入图片会混进去。这时给那个目录单独设一个别的名字即可。
 
 > 这一步必须显式配置 Vditor 的 `upload`。它内部的分支是
 > `if (upload.url || upload.handler) { 走上传 } else { readAsDataURL(...) }` ——
@@ -298,7 +313,8 @@ EDGEMARK_CONFIG=/tmp/test-config.json npm start
 - **右侧「源码 / AI 助手」页签**：源码可编辑，与左侧双向同步
 - **多标签页**：可同时打开多个文件来回切换，标签上有未保存小圆点，`×` 或鼠标中键关闭；
   标签过多时出现下拉列表
-- **本地图片**：markdown 里的相对路径图片能正常显示
+- **本地图片**：markdown 里的相对图片路径图片能正常显示；插入图片会存成文件，
+  保存目录可全局设置、也可按目录覆盖
 - **自动保存**（可开关）与**外部改动监听**（被别的程序改了会提示或自动重载）
 - **深色主题**：跟随「···」菜单切换，记忆在 localStorage
 - **导出 HTML**（单文件，内联样式）与 **PDF**（走浏览器打印对话框）

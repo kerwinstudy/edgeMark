@@ -73,8 +73,20 @@ const els = {
   moreMenu: $('#more-menu'),
   menuTheme: $('#menu-theme'),
   menuAutosave: $('#menu-autosave'),
+  menuImageDir: $('#menu-image-dir'),
   menuExportHtml: $('#menu-export-html'),
   menuExportPdf: $('#menu-export-pdf'),
+
+  // 图片保存目录
+  imgdirDialog: $('#imgdir-dialog'),
+  imgdirHint: $('#imgdir-hint'),
+  imgdirInput: $('#imgdir-input'),
+  imgdirStatus: $('#imgdir-status'),
+  imgdirError: $('#imgdir-error'),
+  imgdirClear: $('#imgdir-clear'),
+  imgdirCancel: $('#imgdir-cancel'),
+  imgdirThis: $('#imgdir-this'),
+  imgdirAll: $('#imgdir-all'),
 
   // 全文搜索
   btnSearch: $('#btn-search'),
@@ -2421,6 +2433,76 @@ els.aiMessages.addEventListener('click', (e) => {
   jumpToQuote(ref.dataset.quote)
 })
 
+// ---------------------------------------------------------------- 图片保存目录
+
+let imgdirState = null
+
+async function openImageDirDialog() {
+  const tab = activeTab()
+  const dir = tab ? dirName(tab.path) : selectedDir
+
+  let data
+  try {
+    data = await api.get('/api/image-dir', { dir })
+  } catch (err) {
+    alert(`读取设置失败：${err.message}`)
+    return
+  }
+
+  imgdirState = data
+  const where = dir === '.' ? '根目录' : dir
+  els.imgdirHint.textContent = `插入的图片会存到「${where}」下的这个子目录里。`
+  els.imgdirInput.value = data.resolved
+  els.imgdirStatus.textContent =
+    (data.override ? `此目录单独设为「${data.override}」。` : '此目录跟随全局默认。') +
+    `全局默认是「${data.global}」。`
+  els.imgdirClear.hidden = !data.override
+  els.imgdirError.textContent = ''
+  els.imgdirDialog.showModal()
+  els.imgdirInput.focus()
+  els.imgdirInput.select()
+}
+
+async function saveImageDir(scope) {
+  const name = els.imgdirInput.value.trim()
+  if (!name) {
+    els.imgdirError.textContent = '目录名不能为空'
+    return
+  }
+
+  try {
+    await api.post('/api/image-dir', { scope, dir: imgdirState.dir, name })
+    els.imgdirDialog.close()
+    const where = imgdirState.dir === '.' ? '根目录' : imgdirState.dir
+    setStatus(
+      scope === 'global'
+        ? `所有目录的图片保存目录已设为「${name}」`
+        : `「${where}」及其子目录的图片保存目录已设为「${name}」`
+    )
+  } catch (err) {
+    els.imgdirError.textContent = err.message
+  }
+}
+
+els.menuImageDir.addEventListener('click', () => {
+  closeAllMenus()
+  openImageDirDialog()
+})
+
+els.imgdirThis.addEventListener('click', () => saveImageDir('dir'))
+els.imgdirAll.addEventListener('click', () => saveImageDir('global'))
+els.imgdirCancel.addEventListener('click', () => els.imgdirDialog.close())
+
+els.imgdirClear.addEventListener('click', async () => {
+  try {
+    await api.post('/api/image-dir', { scope: 'dir', dir: imgdirState.dir, name: '' })
+    els.imgdirDialog.close()
+    setStatus('已清除此目录的设置，改回跟随全局默认')
+  } catch (err) {
+    els.imgdirError.textContent = err.message
+  }
+})
+
 // ---------------------------------------------------------------- 启动自检
 
 /** 页面用到的全部接口。服务端少任何一个，就说明它是个旧进程 */
@@ -2436,6 +2518,8 @@ const REQUIRED_ROUTES = [
   'DELETE /api/entry',
   'POST /api/reveal',
   'GET /api/search',
+  'GET /api/image-dir',
+  'POST /api/image-dir',
   'POST /api/upload',
   'GET /api/watch',
   'POST /api/watch',

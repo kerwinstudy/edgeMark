@@ -59,6 +59,8 @@ const defaultRoot = () => {
 }
 
 const DEFAULT_AI = { baseUrl: 'https://api.openai.com/v1', model: '', apiKey: '' }
+/** 插入图片时默认存到「文档所在目录」下的这个子目录 */
+const DEFAULT_IMAGE_DIR = 'assets'
 
 function readConfigFile(file) {
   try {
@@ -114,7 +116,12 @@ migrateLegacyConfig()
 
 const activeConfigPath = () => (fs.existsSync(CONFIG_PATH) ? CONFIG_PATH : LEGACY_CONFIG_PATH)
 
-let config = { root: defaultRoot(), recentRoots: [], ai: { ...DEFAULT_AI } }
+let config = {
+  root: defaultRoot(),
+  recentRoots: [],
+  ai: { ...DEFAULT_AI },
+  imageDir: { global: DEFAULT_IMAGE_DIR, overrides: {} }
+}
 {
   const raw = readConfigFile(activeConfigPath())
   if (raw) {
@@ -123,6 +130,16 @@ let config = { root: defaultRoot(), recentRoots: [], ai: { ...DEFAULT_AI } }
     if (raw.ai && typeof raw.ai === 'object') {
       for (const key of Object.keys(DEFAULT_AI)) {
         if (typeof raw.ai[key] === 'string') config.ai[key] = raw.ai[key]
+      }
+    }
+    if (raw.imageDir && typeof raw.imageDir === 'object') {
+      if (typeof raw.imageDir.global === 'string' && raw.imageDir.global.trim()) {
+        config.imageDir.global = raw.imageDir.global.trim()
+      }
+      if (raw.imageDir.overrides && typeof raw.imageDir.overrides === 'object') {
+        for (const [key, value] of Object.entries(raw.imageDir.overrides)) {
+          if (typeof value === 'string' && value.trim()) config.imageDir.overrides[key] = value.trim()
+        }
       }
     }
   }
@@ -283,7 +300,40 @@ function parseMultipart(buffer, boundary) {
   return parts
 }
 
-/** 把上传的图片存到「文档旁边的 assets/ 目录」，返回相对文档的路径 */
+/** 图片保存目录名只能是「单个目录名」，不是路径 */
+function assertValidImageDirName(name) {
+  const value = String(name == null ? '' : name).trim()
+  if (!value) throw new HttpError(400, '目录名不能为空')
+  if (value === '.' || value === '..') throw new HttpError(400, '目录名不合法')
+  if (/[/\\]/.test(value)) throw new HttpError(400, '只能填单个目录名，不能包含 /')
+  if (value.length > 64) throw new HttpError(400, '目录名太长（上限 64 字符）')
+  if (/[\u0000-\u001f]/.test(value)) throw new HttpError(400, '目录名含非法字符')
+  return value
+}
+
+/** 从具体目录到根目录的查找顺序：sub/deep → sub → . */
+function overrideKeysFor(dir) {
+  const parts = dir === '.' ? [] : dir.split('/').filter(Boolean)
+  const keys = []
+  for (let i = parts.length; i > 0; i--) keys.push(parts.slice(0, i).join('/'))
+  keys.push('.')
+  return keys
+}
+
+/**
+ * 解析某个目录该用哪个图片目录。
+ * 先找最具体的覆盖设置（该目录自己，或它的某个祖先），没有再退回全局默认。
+ * 所以给 `phone-agent-android` 设一次，它下面的子目录都跟着走。
+ */
+function resolveImageDir(dir) {
+  const overrides = config.imageDir.overrides || {}
+  for (const key of overrideKeysFor(dir)) {
+    if (Object.prototype.hasOwnProperty.call(overrides, key)) return overrides[key]
+  }
+  return config.imageDir.global
+}
+
+/** 把上传的图片存到「文档旁边的图片目录」，返回相对文档的路径 */
 async function saveUploadedImage(dir, filename, buffer) {
   const ext = path.extname(filename).toLowerCase()
   if (!ASSET_MIME[ext]) throw new HttpError(415, `不支持的图片类型：${ext || '(无扩展名)'}`)
@@ -292,7 +342,8 @@ async function saveUploadedImage(dir, filename, buffer) {
     throw new HttpError(413, `图片太大（上限 ${Math.round(MAX_IMAGE_BYTES / 1024 / 1024)} MB）`)
   }
 
-  const assetsDir = resolveInsideRoot(path.join(dir === '.' ? '' : dir, 'assets'))
+  const folder = resolveImageDir(dir)
+  const assetsDir = resolveInsideRoot(path.join(dir === '.' ? '' : dir, folder))
   await fsp.mkdir(assetsDir, { recursive: true })
 
   const stem = path.basename(filename, ext).replace(/[^\w\u4e00-\u9fa5.-]+/g, '-').slice(0, 40) || 'image'
@@ -309,7 +360,7 @@ async function saveUploadedImage(dir, filename, buffer) {
   await fsp.writeFile(abs, buffer)
 
   const relDir = dir === '.' ? '' : dir
-  return relDir ? `${relDir}/assets/${name}` : `assets/${name}`
+  return relDir ? `${relDir}/${folder}/${name}` : `${folder}/${name}`
 }
 
 /** 递归遍历根目录下的可搜索文本文件 */
@@ -584,6 +635,47 @@ const api = {
     }
 
     return { matches, files, truncated }
+  },
+
+  // ------------------------------------------------------------ 图片保存目录
+
+  /** 读某个目录当前生效的图片保存目录，以及全局默认和它自己的覆盖值 */
+  async 'GET /api/image-dir'(query) {
+    const dir = typeof query.dir === 'string' && query.dir ? query.dir : '.'
+    resolveInsideRoot(dir) // 只做路径校验
+
+    const overrides = config.imageDir.overrides || {}
+    const hasOwn = Object.prototype.hasOwnProperty.call(overrides, dir)
+    return {
+      dir,
+      resolved: resolveImageDir(dir),
+      global: config.imageDir.global,
+      override: hasOwn ? overrides[dir] : null
+    }
+  },
+
+  /**
+   * 设置图片保存目录。
+   * scope='global' → 改全局默认；scope='dir' → 只给指定目录（及其子目录）设覆盖。
+   * name 传空 → 清除该目录的覆盖，退回全局默认。
+   */
+  async 'POST /api/image-dir'(body) {
+    const scope = body.scope === 'dir' ? 'dir' : 'global'
+
+    if (scope === 'global') {
+      config.imageDir.global = assertValidImageDirName(body.name)
+    } else {
+      const dir = typeof body.dir === 'string' && body.dir ? body.dir : '.'
+      resolveInsideRoot(dir)
+
+      const overrides = config.imageDir.overrides || (config.imageDir.overrides = {})
+      const name = typeof body.name === 'string' ? body.name.trim() : ''
+      if (name) overrides[dir] = assertValidImageDirName(name)
+      else delete overrides[dir]
+    }
+
+    persistConfig()
+    return { global: config.imageDir.global, overrides: config.imageDir.overrides }
   },
 
   // ------------------------------------------------------------ 在访达中定位

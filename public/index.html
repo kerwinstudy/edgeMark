@@ -32,6 +32,8 @@
             <button id="menu-theme" type="button" class="menu__item">深色主题</button>
             <button id="menu-autosave" type="button" class="menu__item">自动保存</button>
             <div class="menu__sep"></div>
+            <button id="menu-image-dir" type="button" class="menu__item">图片保存目录</button>
+            <div class="menu__sep"></div>
             <button id="menu-export-html" type="button" class="menu__item">导出 HTML</button>
             <button id="menu-export-pdf" type="button" class="menu__item">导出 PDF（打印）</button>
           </div>
@@ -181,6 +183,33 @@
         <menu class="dialog__actions">
           <button id="name-cancel" type="button" class="btn btn--ghost">取消</button>
           <button type="submit" class="btn btn--primary">确定</button>
+        </menu>
+      </form>
+    </dialog>
+
+    <!-- 图片保存目录 -->
+    <dialog id="imgdir-dialog" class="dialog">
+      <form class="dialog__body">
+        <h2 class="dialog__title">图片保存目录</h2>
+        <p id="imgdir-hint" class="dialog__hint"></p>
+
+        <label class="field">
+          <span class="field__label">目录名</span>
+          <input id="imgdir-input" class="input" type="text" spellcheck="false" placeholder="assets" />
+          <span class="field__note">
+            只是上面那个目录里的一个子目录名，不能包含 <code>/</code>。
+            插入图片时如果该目录不存在会自动创建。
+          </span>
+        </label>
+
+        <p id="imgdir-status" class="field__note"></p>
+        <p id="imgdir-error" class="error"></p>
+
+        <menu class="dialog__actions">
+          <button id="imgdir-clear" type="button" class="btn btn--ghost">清除此目录的设置</button>
+          <button id="imgdir-cancel" type="button" class="btn btn--ghost">取消</button>
+          <button id="imgdir-this" type="button" class="btn btn--primary">仅此目录</button>
+          <button id="imgdir-all" type="button" class="btn">所有目录</button>
         </menu>
       </form>
     </dialog>
