@@ -1,0 +1,7 @@
+node_modules/
+.tmp/
+.DS_Store
+
+# 配置已挪到 ~/.edgemark/config.json（不在项目内）。
+# 这条只是兜底：万一旧版本留下的文件还在，别被提交上去。
+.edgemark-config.json

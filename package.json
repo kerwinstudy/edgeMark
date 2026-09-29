@@ -1,0 +1,15 @@
+{
+  "name": "edgemark",
+  "version": "0.1.0",
+  "private": true,
+  "description": "在 Edge 浏览器里打开、编辑、浏览本机 Markdown 文件的本地管理器",
+  "type": "commonjs",
+  "main": "server/index.js",
+  "scripts": {
+    "start": "node server/index.js",
+    "start:open": "node server/index.js --open"
+  },
+  "dependencies": {
+    "markdown-it": "^14.3.2"
+  }
+}

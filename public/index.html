@@ -1,0 +1,270 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>edgeMark · 本机 Markdown 管理器</title>
+
+    <link rel="stylesheet" href="/vendor/github-markdown-light.css" />
+    <link rel="stylesheet" href="/vendor/prism/themes/prism.css" />
+    <link rel="stylesheet" href="/vendor/codemirror/codemirror.css" />
+    <link rel="stylesheet" href="/vendor/codemirror/theme/eclipse.css" />
+    <link rel="stylesheet" href="/vendor/vditor/dist/index.css" />
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+
+  <body>
+    <header class="toolbar">
+      <div class="toolbar__left">
+        <span class="brand">edgeMark</span>
+        <button id="btn-root" class="btn btn--ghost" title="切换根目录">
+          <span class="root-label">选择根目录</span>
+        </button>
+      </div>
+
+      <div class="toolbar__right">
+        <span id="status" class="status"></span>
+        <button id="btn-save" class="btn btn--primary" disabled>保存</button>
+      </div>
+    </header>
+
+    <main class="layout">
+      <aside class="sidebar">
+        <div class="sidebar__head">
+          <span>文件</span>
+          <span class="sidebar__actions">
+            <button id="btn-new-file" type="button" class="icon-btn" title="新建文件">
+              <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true">
+                <path d="M9 1.5H4.5A1.5 1.5 0 0 0 3 3v10A1.5 1.5 0 0 0 4.5 14.5h7A1.5 1.5 0 0 0 13 13V5.5z" fill="none" stroke="currentColor" stroke-width="1.3"/>
+                <path d="M9 1.5V5.5H13" fill="none" stroke="currentColor" stroke-width="1.3"/>
+                <path d="M8 7.8v4.4M5.8 10h4.4" stroke="currentColor" stroke-width="1.3"/>
+              </svg>
+            </button>
+            <button id="btn-new-dir" type="button" class="icon-btn" title="新建文件夹">
+              <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true">
+                <path d="M1.5 3.6a1 1 0 0 1 1-1h3.1l1.3 1.6h6.6a1 1 0 0 1 1 1v7.2a1 1 0 0 1-1 1h-11a1 1 0 0 1-1-1z" fill="none" stroke="currentColor" stroke-width="1.3"/>
+                <path d="M8 7v3.6M6.2 8.8h3.6" stroke="currentColor" stroke-width="1.3"/>
+              </svg>
+            </button>
+            <button id="btn-refresh-tree" type="button" class="icon-btn" title="刷新目录树">
+              <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true">
+                <path d="M13.2 8a5.2 5.2 0 1 1-1.6-3.8" fill="none" stroke="currentColor" stroke-width="1.4"/>
+                <path d="M13.2 1.8V5.2H9.8" fill="none" stroke="currentColor" stroke-width="1.4"/>
+              </svg>
+            </button>
+          </span>
+        </div>
+        <div id="tree" class="tree"></div>
+      </aside>
+
+      <div class="splitter" data-resize="sidebar"></div>
+
+      <div class="workspace">
+        <!-- 多标签栏：空的时候整条隐藏 -->
+        <div id="tabbar" class="tabbar is-empty">
+          <div id="tabs" class="tabs"></div>
+        </div>
+
+        <div class="panes">
+          <!-- 左：所见即所得（Vditor IR 模式），就是 MarkText 那种直接编辑排版结果的界面 -->
+          <section class="pane pane--editor">
+            <div class="pane__head">
+              <span id="current-path" class="current-path">未打开文件</span>
+            </div>
+            <div id="wysiwyg" class="wysiwyg"></div>
+            <!-- 文件过大时改为只让源码面板编辑，这里给出说明 -->
+            <div id="wysiwyg-notice" class="wysiwyg-notice" hidden></div>
+          </section>
+
+          <div class="splitter" data-resize="source"></div>
+
+          <!-- 右：原始 markdown 源码（可编辑，与左侧双向同步）或 AI 助手 -->
+          <section class="pane pane--source">
+            <div class="pane__head pane__head--tabs">
+              <div class="ptabs">
+                <button id="ptab-source" type="button" class="ptab is-active">源码</button>
+                <button id="ptab-ai" type="button" class="ptab">AI 助手</button>
+              </div>
+              <button id="btn-ai-settings" type="button" class="ptab ptab--end" title="AI 设置">设置</button>
+            </div>
+
+            <textarea id="source"></textarea>
+
+            <div id="ai-panel" class="ai-panel" hidden>
+              <div id="ai-messages" class="ai-messages"></div>
+
+              <form id="ai-form" class="ai-form">
+                <textarea
+                  id="ai-input"
+                  class="ai-input"
+                  rows="3"
+                  placeholder="就当前文档提问…（Enter 发送，Shift+Enter 换行）"
+                ></textarea>
+                <div class="ai-form__actions">
+                  <button id="btn-ai-clear" type="button" class="btn btn--ghost">清空对话</button>
+                  <button id="btn-ai-send" type="submit" class="btn btn--primary">发送</button>
+                </div>
+              </form>
+            </div>
+          </section>
+        </div>
+      </div>
+    </main>
+
+    <!-- 根目录选择对话框 -->
+    <dialog id="root-dialog" class="dialog">
+      <form method="dialog" class="dialog__body">
+        <h2 class="dialog__title">选择根目录</h2>
+        <p class="dialog__hint">输入本机上任意一个文件夹的绝对路径，之后所有浏览/编辑都限制在该目录内。</p>
+
+        <input id="root-input" class="input" type="text" spellcheck="false" placeholder="/Users/you/notes" />
+
+        <div id="root-shortcuts" class="shortcuts"></div>
+        <div id="root-recent" class="shortcuts"></div>
+
+        <p id="root-error" class="error"></p>
+
+        <menu class="dialog__actions">
+          <button id="root-cancel" type="button" class="btn btn--ghost">取消</button>
+          <button type="submit" class="btn btn--primary">打开</button>
+        </menu>
+      </form>
+    </dialog>
+
+    <!-- 新建 / 重命名共用的名称输入框 -->
+    <dialog id="name-dialog" class="dialog">
+      <form class="dialog__body">
+        <h2 id="name-title" class="dialog__title">新建文件</h2>
+        <p id="name-hint" class="dialog__hint"></p>
+        <input id="name-input" class="input" type="text" spellcheck="false" autocomplete="off" />
+        <p id="name-error" class="error"></p>
+        <menu class="dialog__actions">
+          <button id="name-cancel" type="button" class="btn btn--ghost">取消</button>
+          <button type="submit" class="btn btn--primary">确定</button>
+        </menu>
+      </form>
+    </dialog>
+
+    <!-- AI 设置 -->
+    <dialog id="ai-dialog" class="dialog">
+      <form class="dialog__body">
+        <h2 class="dialog__title">AI 设置</h2>
+        <p class="dialog__hint">
+          兼容 OpenAI 接口格式（<code>/chat/completions</code>）。密钥只写在本机的
+          <code>.edgemark-config.json</code>（权限 0600），接口不会把它回传给页面。
+        </p>
+
+        <label class="field">
+          <span class="field__label">Base URL</span>
+          <input id="ai-base" class="input" type="text" spellcheck="false" placeholder="https://api.openai.com/v1" />
+          <span class="field__note">填 API 根地址即可，会自动补 <code>/chat/completions</code>；直接粘完整端点也行。</span>
+        </label>
+
+        <label class="field">
+          <span class="field__label">Model</span>
+          <input id="ai-model" class="input" type="text" spellcheck="false" placeholder="gpt-4o-mini" />
+        </label>
+
+        <label class="field">
+          <span class="field__label">API Key</span>
+          <input id="ai-key" class="input" type="password" spellcheck="false" autocomplete="off" placeholder="sk-..." />
+          <span class="field__note" id="ai-key-note"></span>
+        </label>
+
+        <p id="ai-error" class="error"></p>
+
+        <menu class="dialog__actions">
+          <button id="ai-key-clear" type="button" class="btn btn--ghost">清除密钥</button>
+          <button id="ai-cancel" type="button" class="btn btn--ghost">取消</button>
+          <button id="ai-test" type="button" class="btn">测试连接</button>
+          <button type="submit" class="btn btn--primary">保存</button>
+        </menu>
+      </form>
+    </dialog>
+
+    <!-- 启动探针：任何脚本错误/接口失败都显示在页面上，避免界面静默失效 -->
+    <script>
+      window.__edgeMarkErrors = []
+
+      function showBootError(text) {
+        window.__edgeMarkErrors.push(text)
+        var box = document.getElementById('boot-error')
+        if (!box) {
+          box = document.createElement('div')
+          box.id = 'boot-error'
+          box.className = 'boot-error'
+
+          var span = document.createElement('span')
+          span.className = 'boot-error__text'
+          box.appendChild(span)
+
+          // 整条横幅是 pointer-events:none（否则会盖住右下角的 AI 输入框），
+          // 只有这个关闭按钮单独打开点击
+          var close = document.createElement('button')
+          close.type = 'button'
+          close.className = 'boot-error__close'
+          close.textContent = '关闭'
+          close.addEventListener('click', function () {
+            box.remove()
+          })
+          box.appendChild(close)
+
+          document.body.appendChild(box)
+        }
+        box.querySelector('.boot-error__text').textContent = window.__edgeMarkErrors.join(' ｜ ')
+      }
+
+      window.addEventListener('error', function (e) {
+        showBootError('脚本错误：' + e.message + '（' + (e.filename || '?') + ':' + e.lineno + '）')
+      })
+
+      window.addEventListener('unhandledrejection', function (e) {
+        var reason = e.reason
+        var text
+
+        if (reason instanceof Event) {
+          // 最常见的是 <script>/<link> 加载失败（onerror 直接把 Event reject 出来）。
+          // 这类必须报出具体 URL，否则只看到 "[object Event]" 完全没法查。
+          var el = reason.target
+          var url = (el && (el.src || el.href)) || '(未知资源)'
+          text = '资源加载失败：' + url
+        } else if (reason && reason.message) {
+          text = reason.message
+        } else {
+          text = String(reason)
+        }
+
+        showBootError('未处理的 Promise 拒绝：' + text)
+      })
+    </script>
+
+    <!-- CodeMirror 5 + 依赖（全部来自本地 vendor，无需联网） -->
+    <script src="/vendor/codemirror/codemirror.js"></script>
+    <script src="/vendor/codemirror/mode/xml/xml.js"></script>
+    <script src="/vendor/codemirror/mode/markdown/markdown.js"></script>
+    <!-- gfm 模式依赖 CodeMirror.overlayMode，必须排在 gfm.js 之前 -->
+    <script src="/vendor/codemirror/addon/mode/overlay.js"></script>
+    <script src="/vendor/codemirror/mode/gfm/gfm.js"></script>
+    <script src="/vendor/codemirror/addon/edit/continuelist.js"></script>
+    <script src="/vendor/codemirror/addon/selection/active-line.js"></script>
+
+    <!-- 代码高亮 -->
+    <script src="/vendor/prism/prism.js"></script>
+    <script src="/vendor/prism/components/prism-typescript.min.js"></script>
+    <script src="/vendor/prism/components/prism-json.min.js"></script>
+    <script src="/vendor/prism/components/prism-bash.min.js"></script>
+    <script src="/vendor/prism/components/prism-python.min.js"></script>
+    <script src="/vendor/prism/components/prism-yaml.min.js"></script>
+    <script src="/vendor/prism/components/prism-markdown.min.js"></script>
+    <script src="/vendor/prism/components/prism-jsx.min.js"></script>
+    <script src="/vendor/prism/components/prism-tsx.min.js"></script>
+
+    <!-- Markdown → HTML（渲染 AI 回答用） -->
+    <script src="/vendor/markdown-it.min.js"></script>
+
+    <!-- 左侧所见即所得编辑器：Vditor（MIT），cdn 指向本地 vendor 以完全离线运行 -->
+    <script src="/vendor/vditor/dist/index.min.js"></script>
+
+    <script src="/app.js"></script>
+  </body>
+</html>
