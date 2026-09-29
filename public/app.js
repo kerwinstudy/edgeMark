@@ -124,6 +124,33 @@ const els = {
 
 els.rootCancel.addEventListener('click', () => els.dialog.close())
 
+// ---------------------------------------------------------------- 偏好设置
+
+/**
+ * 纯界面偏好，放 localStorage 就够，不必占用服务端配置。
+ *
+ * 注意：这段必须在最前面（Vditor 构造时就要读主题偏好）。
+ * 之前把它放在后面，`const PREF_KEYS` 被提前使用，触发了 TDZ 的
+ * ReferenceError，整个脚本直接挂掉。
+ */
+const PREF_KEYS = { theme: 'edgemark.theme', autosave: 'edgemark.autosave' }
+
+function readPref(key, fallback) {
+  try {
+    return localStorage.getItem(key) ?? fallback
+  } catch {
+    return fallback
+  }
+}
+
+function writePref(key, value) {
+  try {
+    localStorage.setItem(key, value)
+  } catch {
+    /* 隐私模式下可能写不了，忽略 */
+  }
+}
+
 // ---------------------------------------------------------------- 接口
 
 async function request(method, url, { params, body } = {}) {
@@ -400,27 +427,6 @@ els.wysiwyg.addEventListener(
   },
   true
 )
-
-// ---------------------------------------------------------------- 偏好设置
-
-/** 这些是纯界面偏好，放 localStorage 就够，不必占用服务端配置 */
-const PREF_KEYS = { theme: 'edgemark.theme', autosave: 'edgemark.autosave' }
-
-function readPref(key, fallback) {
-  try {
-    return localStorage.getItem(key) ?? fallback
-  } catch {
-    return fallback
-  }
-}
-
-function writePref(key, value) {
-  try {
-    localStorage.setItem(key, value)
-  } catch {
-    /* 隐私模式下可能写不了，忽略 */
-  }
-}
 
 // ---------------------------------------------------------------- 主题
 
