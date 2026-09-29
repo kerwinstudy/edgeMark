@@ -426,6 +426,17 @@ function clickToolbar(name) {
 }
 
 /**
+ * 是不是 macOS。
+ *
+ * 标题快捷键在两个平台上不一样，必须分开处理：
+ * - Mac：Vditor 把标题硬编码在 ⌥⌘1~⌥⌘6 上，我桥接出 ⌘1~⌘6
+ * - 其它平台：Vditor 的 isMac() 判定是「Ctrl 且非 Meta」，所以它原生的标题键
+ *   就是 Ctrl+Alt+1~6。而 Ctrl+1~9 是浏览器切换标签页的快捷键，页面拦不住，
+ *   所以非 Mac 上不能去拦 Ctrl+数字，直接交给 Vditor 自己的 Ctrl+Alt+N。
+ */
+const IS_MAC = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent)
+
+/**
  * 左侧的快捷键。
  *
  * ⌘1~⌘6 设标题：Vditor 把等价功能硬编码在 ⌥⌘1~⌥⌘6 上（内部走 `It(vditor, "## ")`，
@@ -433,16 +444,16 @@ function clickToolbar(name) {
  * altKey=true 的同键事件，让它自己的成熟逻辑处理。派发出去的事件带 altKey，
  * 不会再命中这个分支，不会递归。
  *
- * ⌘⇧K 插代码块：Vditor 的 `code` / `inline-code` 工具栏项没有绑定任何快捷键
- * （我核对过它的 hotkey 表），所以这里补一个。用 ⌘⇧K 而不是 MarkText 的 ⌥⌘C，
- * 是因为 ⌥⌘C 是 Edge 的「检查元素」，属于浏览器级快捷键，页面拦不住。
+ * ⌘⇧K / Ctrl+Shift+K 插代码块：Vditor 的 `code` / `inline-code` 工具栏项没有绑定
+ * 任何快捷键（核对过它的 hotkey 表），所以这里补一个。用 ⌘⇧K 而不是 MarkText 的
+ * ⌥⌘C，是因为 ⌥⌘C 是 Edge 的「检查元素」，属于浏览器级快捷键，页面拦不住。
  */
 els.wysiwyg.addEventListener(
   'keydown',
   (e) => {
     if (!(e.metaKey || e.ctrlKey)) return
 
-    if (!e.altKey && !e.shiftKey && /^Digit[1-6]$/.test(e.code)) {
+    if (IS_MAC && !e.altKey && !e.shiftKey && /^Digit[1-6]$/.test(e.code)) {
       e.preventDefault()
       e.stopPropagation()
       e.target.dispatchEvent(

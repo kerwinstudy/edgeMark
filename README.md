@@ -66,17 +66,37 @@ EDGEMARK_CONFIG=/tmp/test-config.json npm start
 
 ## 快捷键
 
-| 操作 | 快捷键 |
-| --- | --- |
-| 标题 1~6 | `Cmd+1` ~ `Cmd+6` |
-| 代码块 | `Cmd+Shift+K` |
-| 加粗 / 斜体 / 链接 | `Cmd+B` / `Cmd+I` / `Cmd+K` |
-| 撤销 / 重做 | `Cmd+Z` / `Cmd+Y` |
-| 保存 | `Cmd+S` |
-| 列表自动续行 | `Enter` |
+| 操作 | macOS | Windows / Linux |
+| --- | --- | --- |
+| 标题 1~6 | `Cmd+1` ~ `Cmd+6` | `Ctrl+Alt+1` ~ `Ctrl+Alt+6` |
+| 代码块 | `Cmd+Shift+K` | `Ctrl+Shift+K` |
+| 加粗 / 斜体 / 链接 | `Cmd+B` / `Cmd+I` / `Cmd+K` | `Ctrl+B` / `Ctrl+I` / `Ctrl+K` |
+| 撤销 / 重做 | `Cmd+Z` / `Cmd+Y` | `Ctrl+Z` / `Ctrl+Y` |
+| 保存 | `Cmd+S` | `Ctrl+S` |
+| 列表自动续行 | `Enter` | `Enter` |
 
-MarkText 的代码块快捷键是 `⌥⌘C`，但那是 Edge 的「检查元素」，属于浏览器级快捷键、
-页面拦不住，所以改用 Typora 的 `Cmd+Shift+K`。同理其余 `⌥⌘` 前缀的键也都需要换。
+两个平台按键不同的原因：
+
+- **标题**：macOS 上用的是 MarkText 的 `Cmd+数字`。Windows 上 `Ctrl+1`~`Ctrl+9` 是
+  浏览器切换标签页的快捷键，**页面拦不住**，所以改用 `Ctrl+Alt+数字`
+  （这是 Vditor 原生就支持的绑定）。
+- **代码块**：MarkText 用的是 `⌥⌘C`，但那是 Edge 的「检查元素」，属于浏览器级快捷键、
+  页面拦不住，所以两个平台都改用 Typora 的约定。
+
+其余快捷键由 Vditor 自己处理，它会按平台把「主修饰键」映射成 `Cmd` 或 `Ctrl`。
+
+## 平台支持
+
+这个工具目前**以 macOS 为主**，除快捷键外还有几处是 macOS 专属：
+
+| 功能 | macOS | Windows / Linux |
+| --- | --- | --- |
+| 编辑、搜索、图片、AI、导出 | ✅ | ✅ |
+| `start.command` 双击启动 | ✅ | ❌（用 `npm start`） |
+| 删除 → 废纸篓 | ✅ `~/.Trash` | ❌ 会报错 |
+| 右键「在访达中显示」 | ✅ | ❌ 会报错 |
+
+Windows 下需要的是「回收站 API」和「资源管理器定位」，目前没做。
 
 ## 说明
 

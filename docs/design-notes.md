@@ -70,6 +70,28 @@ Vditor 把等价的标题功能硬编码在 `⌥⌘1`~`⌥⌘6` 上，内部走 
 再派发一个 `altKey=true` 的同键事件，让它自己的成熟逻辑处理。派发出去的事件带 `altKey`，
 不会再命中这个分支，不会递归。
 
+### 跨平台差异
+
+Vditor 的快捷键字符串里那个 `⌘` 表示「**平台的主修饰键**」，不是字面的 Cmd。
+它的匹配器是：
+
+```js
+!(isMac(t) || t.altKey || t.shiftKey || t.code !== e)
+```
+
+而 `isMac` 在非 Mac 平台上的判定是 `!metaKey && ctrlKey`（也就是 Ctrl）。所以：
+
+- **Vditor 自带的**（加粗 / 斜体 / 链接 / 撤销…）在 Mac 上是 `Cmd+X`，
+  在 Windows 上自动变成 `Ctrl+X`，不用管。
+- **标题**：Mac 上是 `⌥⌘1~6`，**Windows 上原生就是 `Ctrl+Alt+1~6`**。
+
+因此 `⌘1~6` 的桥接**只在 macOS 上启用**（`IS_MAC` 判断）。Windows 上 `Ctrl+1`~`Ctrl+9`
+是浏览器切换标签页的快捷键、页面拦不住，如果也去拦会变成「既切了标签页又插了标题」。
+非 Mac 上不拦，交给 Vditor 自己的 `Ctrl+Alt+N`。
+
+保存（`Cmd/Ctrl+S`）和代码块（`Cmd/Ctrl+Shift+K`）的处理器同时接受 `metaKey` 和
+`ctrlKey`，两个平台通用。
+
 ## 接口
 
 所有路径参数都是**相对根目录**的路径，服务端会拒绝任何越出根目录的请求。
