@@ -289,6 +289,34 @@ const vditor = new window.Vditor('wysiwyg', {
   // 关键：Vditor 默认会用 localStorage 缓存内容，那样会覆盖我们按文件加载的内容
   cache: { enable: false },
   counter: { enable: false },
+  /**
+   * 图片上传。
+   *
+   * 必须配这一项 —— 否则 Vditor 找不到上传地址，会退回用 FileReader 把图片读成
+   * base64 data URL 直接写进 markdown（它内部的分支就是
+   * `if (upload.url || upload.handler) {...} else { readAsDataURL(...) }`）。
+   * 那样文档里会塞进一大坨 base64，点开图片看到的就是它。
+   *
+   * 走 upload.url 而不是 upload.handler，是因为插入动作交给 Vditor 自己做更可靠：
+   * 它清楚自己的选区和模型，而 handler 的契约是「返回字符串=错误提示」，
+   * 插入得我们自己调 insertValue，文件对话框会夺走焦点、选区未必还在。
+   */
+  upload: {
+    url: '/api/upload',
+    accept: 'image/*',
+    fieldName: 'file[]',
+    multiple: true,
+    max: 20 * 1024 * 1024,
+    // upload.url 是构造时定死的，但当前文件所在目录会随标签切换而变。
+    // setHeaders 每次上传前都会重新调用，用它把目标目录带过去。
+    setHeaders() {
+      const tab = activeTab()
+      return { 'X-EdgeMark-Dir': encodeURIComponent(tab ? dirName(tab.path) : '.') }
+    },
+    error(msg) {
+      setStatus(`图片上传失败：${typeof msg === 'string' ? msg : JSON.stringify(msg)}`)
+    }
+  },
   // 去掉会切换编辑模式的（edit-mode/both/preview）和依赖上传服务的（upload/record）
   toolbar: [
     'emoji', 'headings', 'bold', 'italic', 'strike', '|',
@@ -2408,7 +2436,7 @@ const REQUIRED_ROUTES = [
   'DELETE /api/entry',
   'POST /api/reveal',
   'GET /api/search',
-  'GET /api/asset',
+  'POST /api/upload',
   'GET /api/watch',
   'POST /api/watch',
   'GET /api/ai/config',

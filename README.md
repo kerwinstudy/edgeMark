@@ -129,7 +129,7 @@ mermaid / plantuml / echarts 等图表渲染库。这里把 `cdn` 指向 `/vendo
 | DELETE | `/api/entry` | 删除，`{ path }` —— **移入废纸篓，不做永久删除** |
 | POST | `/api/reveal` | 在访达中定位，`{ path }`（仅 macOS） |
 | GET | `/api/search?q=&regex=&case=&limit=` | 全文搜索，返回 `{ matches, files, truncated }` |
-| GET | `/api/asset?path=<rel>` | 取根目录内的图片（**只允许图片类型**） |
+| POST | `/api/upload` | 接收图片（multipart），存到文档旁的 `assets/`，返回 Vditor 约定格式 |
 | GET | `/api/watch` | 订阅「已打开文件被外部改动」（SSE 长连接） |
 | POST | `/api/watch` | 设置监视清单，`{ paths: [...] }` |
 | GET | `/api/routes` | 列出服务端实际注册的接口（前端启动自检用） |
@@ -153,9 +153,28 @@ mermaid / plantuml / echarts 等图表渲染库。这里把 `cdn` 指向 `/vendo
 
 ### 本地图片
 
-markdown 里的相对图片路径能被正确解析，靠的是**让页面 URL 跟着当前文件走**：
-打开 `sub/notes.md` 时地址变成 `/sub/notes.md`，于是 `images/a.png` 被浏览器解析成
-`/sub/images/a.png`，服务端再从根目录把这张图发出来。
+**插入图片**（工具栏的图片按钮、拖拽、粘贴）会把图片存成**文件**，写在文档旁边的
+`assets/` 目录里，markdown 里插入相对路径，例如：
+
+```markdown
+![截图](assets/截图-20260929061329.png)
+```
+
+文件名是 `原名-时间戳.ext`，重名时再加序号，不覆盖已有文件。只接受图片类型，
+单张上限 20MB。
+
+> 这一步必须显式配置 Vditor 的 `upload`。它内部的分支是
+> `if (upload.url || upload.handler) { 走上传 } else { readAsDataURL(...) }` ——
+> 不配的话它会用 `FileReader` 把图片读成 **base64 data URL 直接写进 markdown**，
+> 文档里会塞进一大坨 base64，点开图片看到的就是它。
+
+走 `upload.url` 而不是 `upload.handler`，是因为**插入动作交给 Vditor 自己做更可靠**：
+它清楚自己的选区和模型；而 `handler` 的契约是「返回字符串=错误提示」，插入得自己调
+`insertValue`，可文件对话框会夺走焦点、选区未必还在。
+
+**显示图片**靠的是**让页面 URL 跟着当前文件走**：打开 `sub/notes.md` 时地址变成
+`/sub/notes.md`，于是 `assets/a.png` 被浏览器解析成 `/sub/assets/a.png`，
+服务端再从根目录把这张图发出来。
 
 **为什么不用「改写 DOM 里 img 的 src」这个显而易见的做法**：Vditor 的 `getValue()` 是
 `lute.VditorIRDOM2Md(ir.element.innerHTML)` —— **从 DOM 反推 markdown**。改 `src` 会被

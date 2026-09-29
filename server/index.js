@@ -37,7 +37,8 @@ const CONFIG_IS_OVERRIDDEN = Boolean(process.env.EDGEMARK_CONFIG)
 const LEGACY_CONFIG_PATH = path.join(PROJECT_DIR, '.edgemark-config.json')
 
 const DEFAULT_PORT = 5178
-const MAX_BODY = 32 * 1024 * 1024 // 单次写入上限 32MB
+const MAX_BODY = 32 * 1024 * 1024 // 单次请求上限 32MB
+const MAX_IMAGE_BYTES = 20 * 1024 * 1024 // 单张图片上限 20MB
 
 /** 认作可编辑文本的扩展名 */
 const TEXT_EXTENSIONS = new Set([
@@ -234,6 +235,83 @@ const ASSET_MIME = {
   '.svg': 'image/svg+xml'
 }
 
+/**
+ * 解析 multipart/form-data。
+ *
+ * 只为接住 Vditor 的图片上传（它固定用 FormData 发 `file[]`）。
+ * 用一个简单扫描：按 boundary 切段，再在每段里找 `\r\n\r\n` 分隔头与体。
+ * 理论上文件内容里恰好出现 boundary 会误判，但 boundary 是浏览器生成的随机串，
+ * 概率可以忽略。
+ */
+function parseMultipart(buffer, boundary) {
+  const delimiter = Buffer.from(`--${boundary}`)
+  const parts = []
+  let cursor = buffer.indexOf(delimiter)
+
+  while (cursor !== -1) {
+    const afterDelimiter = cursor + delimiter.length
+
+    // `--boundary--` 是结束标记
+    if (buffer.slice(afterDelimiter, afterDelimiter + 2).toString() === '--') break
+
+    let head = afterDelimiter
+    if (buffer.slice(head, head + 2).toString() === '\r\n') head += 2
+
+    const next = buffer.indexOf(delimiter, head)
+    if (next === -1) break
+
+    // 每段末尾多一个 CRLF，不算进内容
+    let end = next
+    if (buffer.slice(end - 2, end).toString() === '\r\n') end -= 2
+
+    const segment = buffer.slice(head, end)
+    const split = segment.indexOf('\r\n\r\n')
+    if (split !== -1) {
+      const headerText = segment.slice(0, split).toString('utf8')
+      const nameMatch = /name="([^"]*)"/i.exec(headerText)
+      const fileMatch = /filename="([^"]*)"/i.exec(headerText)
+      parts.push({
+        name: nameMatch ? nameMatch[1] : '',
+        filename: fileMatch ? fileMatch[1] : null,
+        data: segment.slice(split + 4)
+      })
+    }
+
+    cursor = next
+  }
+
+  return parts
+}
+
+/** 把上传的图片存到「文档旁边的 assets/ 目录」，返回相对文档的路径 */
+async function saveUploadedImage(dir, filename, buffer) {
+  const ext = path.extname(filename).toLowerCase()
+  if (!ASSET_MIME[ext]) throw new HttpError(415, `不支持的图片类型：${ext || '(无扩展名)'}`)
+  if (!buffer.length) throw new HttpError(400, '图片内容为空')
+  if (buffer.length > MAX_IMAGE_BYTES) {
+    throw new HttpError(413, `图片太大（上限 ${Math.round(MAX_IMAGE_BYTES / 1024 / 1024)} MB）`)
+  }
+
+  const assetsDir = resolveInsideRoot(path.join(dir === '.' ? '' : dir, 'assets'))
+  await fsp.mkdir(assetsDir, { recursive: true })
+
+  const stem = path.basename(filename, ext).replace(/[^\w\u4e00-\u9fa5.-]+/g, '-').slice(0, 40) || 'image'
+  const stamp = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 14)
+
+  let name = `${stem}-${stamp}${ext}`
+  let abs = path.join(assetsDir, name)
+  let n = 1
+  while (await exists(abs)) {
+    name = `${stem}-${stamp}-${n++}${ext}`
+    abs = path.join(assetsDir, name)
+  }
+
+  await fsp.writeFile(abs, buffer)
+
+  const relDir = dir === '.' ? '' : dir
+  return relDir ? `${relDir}/assets/${name}` : `assets/${name}`
+}
+
 /** 递归遍历根目录下的可搜索文本文件 */
 async function* walkTextFiles(dir, depth = 0) {
   if (depth > 12) return
@@ -274,9 +352,20 @@ async function readBody(req) {
     if (size > MAX_BODY) throw new HttpError(413, '请求体过大')
     chunks.push(chunk)
   }
-  if (!chunks.length) return {}
+
+  const buffer = Buffer.concat(chunks)
+  const contentType = req.headers['content-type'] || ''
+
+  // 图片上传走 multipart，不能当 JSON 解析
+  if (contentType.includes('multipart/form-data')) {
+    const match = /boundary=(?:"([^"]+)"|([^;]+))/i.exec(contentType)
+    if (!match) throw new HttpError(400, '缺少 multipart boundary')
+    return { __multipart: parseMultipart(buffer, (match[1] || match[2]).trim()) }
+  }
+
+  if (!buffer.length) return {}
   try {
-    return JSON.parse(Buffer.concat(chunks).toString('utf8'))
+    return JSON.parse(buffer.toString('utf8'))
   } catch {
     throw new HttpError(400, '请求体不是合法 JSON')
   }
@@ -497,22 +586,7 @@ const api = {
     return { matches, files, truncated }
   },
 
-  // ------------------------------------------------------------ 本地图片
-
-  /**
-   * 服务根目录内的图片。刻意只允许图片类型 —— 不做成通用文件读取接口，
-   * 免得变成一个能读任意文件的口子。
-   */
-  async 'GET /api/asset'(query) {
-    const abs = resolveInsideRoot(query.path)
-    const mime = ASSET_MIME[path.extname(abs).toLowerCase()]
-    if (!mime) throw new HttpError(415, '只支持图片类型')
-
-    const stat = await fsp.stat(abs).catch(() => null)
-    if (!stat || !stat.isFile()) throw new HttpError(404, '图片不存在')
-
-    return { __raw: abs, mime, size: stat.size }
-  },
+  // ------------------------------------------------------------ 在访达中定位
 
   /** 在访达中定位该文件（仅 macOS） */
   async 'POST /api/reveal'(body) {
@@ -539,6 +613,53 @@ const api = {
     }
     refreshWatchers()
     return { watching: watchedFiles.size }
+  },
+
+  // ------------------------------------------------------------ 图片上传
+
+  /**
+   * 接住 Vditor 的图片上传（multipart/form-data，字段名 `file[]`）。
+   *
+   * 返回 Vditor 约定的格式，插入动作交给它自己做 —— 它清楚自己的选区和模型，
+   * 比我们从外面调 insertValue 可靠（文件对话框会夺走焦点，选区未必还在）。
+   *
+   * 目标目录从请求头 `X-EdgeMark-Dir` 取，因为 Vditor 的 upload.url 是构造时定死的，
+   * 而当前文件所在目录会随标签切换而变；setHeaders 每次上传前都会重新调用。
+   */
+  async 'POST /api/upload'(body, query, req) {
+    const parts = body && body.__multipart
+    if (!parts) throw new HttpError(400, '需要 multipart/form-data')
+
+    let dir = '.'
+    const rawDir = req.headers['x-edgemark-dir']
+    if (typeof rawDir === 'string' && rawDir) {
+      try {
+        dir = decodeURIComponent(rawDir)
+      } catch {
+        dir = '.'
+      }
+    }
+
+    const files = parts.filter((p) => p.filename)
+    if (!files.length) throw new HttpError(400, '没有收到文件')
+
+    const succMap = {}
+    const errFiles = []
+    let lastError = null
+
+    for (const file of files) {
+      try {
+        succMap[file.filename] = await saveUploadedImage(dir, file.filename, file.data)
+      } catch (err) {
+        lastError = err
+        errFiles.push(file.filename)
+      }
+    }
+
+    // 全军覆没时直接把原因抛出去，比回一个空 succMap 更容易排查
+    if (!Object.keys(succMap).length && lastError) throw lastError
+
+    return { code: 0, msg: '', data: { errFiles, succMap } }
   },
 
   // ------------------------------------------------------------ 自检
@@ -917,13 +1038,7 @@ const server = http.createServer(async (req, res) => {
     if (api[route]) {
       const query = Object.fromEntries(url.searchParams)
       const body = req.method === 'GET' ? {} : await readBody(req)
-      const result = await api[route](req.method === 'GET' ? query : body)
-
-      // 少数接口要直接回文件而不是 JSON（目前只有 /api/asset）
-      if (result && result.__raw) {
-        await sendFile(res, result.__raw, result.mime, result.size)
-        return
-      }
+      const result = await api[route](req.method === 'GET' ? query : body, query, req)
 
       json(res, 200, result)
       return
