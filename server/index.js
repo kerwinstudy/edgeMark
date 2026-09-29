@@ -1191,15 +1191,21 @@ const STATIC_EXTENSIONS = new Set([
   '.txt', '.xml'
 ])
 
-async function sendFile(res, abs, mime, size) {
+/**
+ * 发一个文件。
+ *
+ * `untrusted` 用来区分来源：用户根目录里的 SVG 可能内嵌脚本，加上沙箱 CSP 限制它；
+ * 而应用自己的资源（favicon、vendor 等）是可信的，不能套这层限制 ——
+ * 沙箱 CSP 会影响 SVG 作为图片渲染。
+ */
+async function sendFile(res, abs, mime, size, { untrusted = false } = {}) {
   const headers = {
     'Content-Type': mime,
     'Content-Length': size,
     'Cache-Control': 'no-cache',
     'X-Content-Type-Options': 'nosniff'
   }
-  // SVG 里可能有脚本；它只该被 <img> 引用，不该被当文档打开
-  if (mime === 'image/svg+xml') {
+  if (untrusted && mime === 'image/svg+xml') {
     headers['Content-Security-Policy'] = "sandbox; default-src 'none'; style-src 'unsafe-inline'"
   }
   res.writeHead(200, headers)
@@ -1234,7 +1240,8 @@ async function serveStatic(req, res, pathname) {
     }
     const stat = abs ? await fsp.stat(abs).catch(() => null) : null
     if (stat && stat.isFile()) {
-      await sendFile(res, abs, assetMime, stat.size)
+      // 来自用户目录，按不可信处理
+      await sendFile(res, abs, assetMime, stat.size, { untrusted: true })
       return
     }
   }
