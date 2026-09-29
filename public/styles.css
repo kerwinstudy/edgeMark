@@ -9,8 +9,59 @@
   --text: #1f2328;
   --text-dim: #656d76;
   --accent: #0969da;
+  --accent-hover: #0860ca;
   --accent-soft: #ddf4ff;
+
+  /* 面板 / 输入框底色，以及各种悬停、选中态 */
+  --surface: #ffffff;
+  --hover: rgba(0, 0, 0, 0.05);
+  --hover-strong: rgba(0, 0, 0, 0.12);
+  --selected: #eef3f8;
+
+  /* 危险色（删除、错误） */
+  --danger: #cf222e;
+  --danger-bg: #ffebe9;
+  --danger-fg: #82071e;
+  --dirty: #bc4c00;
+
+  /* AI 修改卡片 */
+  --ok-bg: #eaf7ee;
+  --ok-fg: #1a7f37;
+  --add-bg: #e6ffec;
+  --add-fg: #116329;
+  --fail-bg: #fff5f5;
+
   --toolbar-h: 46px;
+}
+
+/* ---------------------------------------------------------------- 深色主题 */
+
+:root[data-theme='dark'] {
+  color-scheme: dark;
+
+  --bg: #0d1117;
+  --bg-soft: #161b22;
+  --border: #30363d;
+  --text: #e6edf3;
+  --text-dim: #8b949e;
+  --accent: #2f81f7;
+  --accent-soft: #1b2a3d;
+
+  --surface: #161b22;
+  --hover: rgba(255, 255, 255, 0.07);
+  --hover-strong: rgba(255, 255, 255, 0.16);
+  --selected: #1c2733;
+
+  --danger: #f85149;
+  --danger-bg: #3d1a1c;
+  --danger-fg: #ff9b95;
+  --dirty: #d29922;
+
+  --ok-bg: #12261a;
+  --ok-fg: #3fb950;
+  --add-bg: #12261a;
+  --add-fg: #7ee787;
+  --fail-bg: #2a1618;
 }
 
 * {
@@ -75,7 +126,7 @@ body {
 }
 
 .status--dirty {
-  color: #bc4c00;
+  color: var(--dirty);
 }
 
 .btn {
@@ -83,13 +134,13 @@ body {
   padding: 4px 12px;
   border: 1px solid var(--border);
   border-radius: 6px;
-  background: #fff;
+  background: var(--surface);
   color: var(--text);
   cursor: pointer;
 }
 
 .btn:hover:not(:disabled) {
-  background: #f3f4f6;
+  background: var(--hover);
 }
 
 .btn:disabled {
@@ -104,7 +155,7 @@ body {
 }
 
 .btn--primary:hover:not(:disabled) {
-  background: #0860ca;
+  background: var(--accent-hover);
 }
 
 .btn--ghost {
@@ -112,13 +163,13 @@ body {
 }
 
 .btn--danger {
-  background: #cf222e;
-  border-color: #cf222e;
+  background: var(--danger);
+  border-color: var(--danger);
   color: #fff;
 }
 
 .btn--danger:hover:not(:disabled) {
-  background: #b81c28;
+  background: var(--accent-hover);
 }
 
 /* ---------------------------------------------------------------- 主布局 */
@@ -185,7 +236,7 @@ body {
 }
 
 .tab:hover {
-  background: rgba(0, 0, 0, 0.035);
+  background: var(--hover);
 }
 
 .tab.is-active {
@@ -199,7 +250,7 @@ body {
   width: 7px;
   height: 7px;
   border-radius: 50%;
-  background: #bc4c00;
+  background: var(--dirty);
   opacity: 0;
 }
 
@@ -229,7 +280,7 @@ body {
 }
 
 .tab__close:hover {
-  background: rgba(0, 0, 0, 0.12);
+  background: var(--hover-strong);
   color: var(--text);
 }
 
@@ -314,7 +365,7 @@ body {
 }
 
 .icon-btn:hover {
-  background: rgba(0, 0, 0, 0.07);
+  background: var(--hover);
   color: var(--text);
 }
 
@@ -351,7 +402,7 @@ body {
 
 /* 新建的目标目录，给一个更淡的标记区别于「当前打开的文件」 */
 .tree__row.is-selected:not(.is-active) {
-  background: #eef3f8;
+  background: var(--selected);
 }
 
 /* 悬停时出现的重命名 / 删除 */
@@ -415,7 +466,7 @@ body {
 .tree__icon--file {
   border: 1.5px solid #8c959f;
   border-radius: 1px;
-  background: #fff;
+  background: var(--surface);
 }
 
 .tree__name {
@@ -431,7 +482,7 @@ body {
 }
 
 .tree__error {
-  color: #cf222e;
+  color: var(--danger);
 }
 
 /* ---------------------------------------------------------------- 左侧所见即所得 */
@@ -585,7 +636,7 @@ body {
 .error {
   margin: 10px 0 0;
   min-height: 16px;
-  color: #cf222e;
+  color: var(--danger);
   font-size: 12.5px;
 }
 
@@ -636,7 +687,7 @@ body {
   border: 1px solid var(--border);
   border-radius: 5px;
   padding: 2px 8px;
-  background: #fff;
+  background: var(--surface);
 }
 
 /* ---------------------------------------------------------------- AI 面板 */
@@ -730,15 +781,15 @@ body {
   border: 1px solid var(--border);
   border-radius: 8px;
   overflow: hidden;
-  background: #fff;
+  background: var(--surface);
 }
 
 .ai-edits__head {
   padding: 7px 11px;
   font-size: 12.5px;
   font-weight: 600;
-  color: #1a7f37;
-  background: #eaf7ee;
+  color: var(--ok-fg);
+  background: var(--ok-bg);
   border-bottom: 1px solid var(--border);
 }
 
@@ -756,7 +807,7 @@ body {
 }
 
 .ai-edit.is-failed {
-  background: #fff5f5;
+  background: var(--fail-bg);
 }
 
 .ai-edit__label {
@@ -766,7 +817,7 @@ body {
 }
 
 .ai-edit.is-failed .ai-edit__label {
-  color: #cf222e;
+  color: var(--danger);
 }
 
 .ai-edit__diff {
@@ -789,13 +840,13 @@ body {
 }
 
 .ai-edit__line.is-del {
-  background: #ffebe9;
-  color: #82071e;
+  background: var(--danger-bg);
+  color: var(--danger-fg);
 }
 
 .ai-edit__line.is-add {
-  background: #e6ffec;
-  color: #116329;
+  background: var(--add-bg);
+  color: var(--add-fg);
 }
 
 .ai-edits__actions {
@@ -828,7 +879,7 @@ body {
   line-height: 1.55;
   border: 1px solid var(--border);
   border-radius: 6px;
-  background: #fff;
+  background: var(--surface);
   color: var(--text);
   /* 显式指定，避免被 UA 或其它规则影响导致光标看不见 */
   caret-color: var(--text);
@@ -881,6 +932,228 @@ body {
   padding: 0 3px;
 }
 
+/* ---------------------------------------------------------------- 下拉菜单 */
+
+.menu {
+  position: relative;
+}
+
+.menu__panel {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  z-index: 200;
+  min-width: 176px;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.2);
+}
+
+.menu__panel[hidden] {
+  display: none;
+}
+
+/* 右键菜单跟着鼠标位置走，所以用 fixed */
+.menu__panel--context {
+  position: fixed;
+  top: auto;
+  right: auto;
+}
+
+.menu__item {
+  display: block;
+  width: 100%;
+  padding: 5px 10px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+/* 给勾选标记留固定位置，避免开关状态切换时文字左右跳动 */
+.menu__item::before {
+  content: '';
+  display: inline-block;
+  width: 15px;
+}
+
+.menu__item.is-on::before {
+  content: '\2713';
+  color: var(--accent);
+}
+
+.menu__item:hover {
+  background: var(--hover);
+}
+
+.menu__sep {
+  height: 1px;
+  margin: 4px 6px;
+  background: var(--border);
+}
+
+/* ---------------------------------------------------------------- 标签溢出下拉 */
+
+.tabbar {
+  position: relative;
+}
+
+.tab-more {
+  flex: 0 0 auto;
+  width: 26px;
+  border: 0;
+  border-left: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+
+.tab-more:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+
+.tab-more[hidden] {
+  display: none;
+}
+
+/* ---------------------------------------------------------------- 全文搜索 */
+
+.search-bar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 6px 6px 8px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-soft);
+}
+
+.search-bar[hidden] {
+  display: none;
+}
+
+.search-bar .input {
+  flex: 1 1 auto;
+  font-family: inherit;
+  font-size: 13px;
+}
+
+.search-results {
+  flex: 1 1 0;
+  overflow-y: auto;
+  padding: 4px 0 24px;
+}
+
+.search-results[hidden] {
+  display: none;
+}
+
+.search-hit {
+  padding: 5px 10px;
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+}
+
+.search-hit:hover {
+  background: var(--accent-soft);
+}
+
+.search-hit__head {
+  font-size: 11.5px;
+  color: var(--text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.search-hit__line {
+  margin-top: 2px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.search-hit__line mark {
+  padding: 0 1px;
+  border-radius: 2px;
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.search-empty {
+  padding: 10px 12px;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+/* ---------------------------------------------------------------- 拖拽移动 */
+
+.tree__row.is-drop-target {
+  background: var(--accent-soft);
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+
+.tree__row.is-dragging {
+  opacity: 0.45;
+}
+
+/* 回答里能对上原文的行内代码：可点击跳转 */
+.ai-ref {
+  cursor: pointer;
+  border-bottom: 1px dashed var(--accent);
+}
+
+.ai-ref:hover {
+  background: var(--accent-soft);
+}
+
+/* ---------------------------------------------------------------- 编辑器里的图片 */
+
+.wysiwyg img {
+  max-width: 100%;
+  height: auto;
+}
+
+/* ---------------------------------------------------------------- 打印 / 导出 PDF */
+
+/* 只用于打印的容器，平时不显示 */
+#print-holder {
+  display: none;
+}
+
+@media print {
+  /* 打印期间藏掉界面，只留渲染好的正文 */
+  body.is-printing > *:not(#print-holder) {
+    display: none !important;
+  }
+
+  body.is-printing {
+    background: #fff !important;
+  }
+
+  body.is-printing #print-holder {
+    display: block;
+    max-width: none;
+    padding: 0;
+  }
+
+  body.is-printing #print-holder pre,
+  body.is-printing #print-holder table,
+  body.is-printing #print-holder img {
+    break-inside: avoid;
+  }
+}
+
 /* 启动失败时的错误横幅。
    pointer-events: none 很关键 —— 它是 fixed 定位横跨整个视口底部的，
    否则会盖住右下角 AI 输入框那一带，让人点不进去、也看不到光标。 */
@@ -900,7 +1173,7 @@ body {
   font-size: 12px;
   line-height: 1.6;
   color: #fff;
-  background: #cf222e;
+  background: var(--danger);
   white-space: pre-wrap;
   pointer-events: none;
 }

@@ -176,6 +176,8 @@ const exists = (p) =>
     () => false
   )
 
+const escapeRegExp = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+
 /**
  * 移入系统废纸篓。
  *
@@ -216,6 +218,41 @@ function assertCreatable(abs) {
   if (!name || name === '.' || name === '..') throw new HttpError(400, '名称不合法')
   if (name.startsWith('.')) {
     throw new HttpError(400, '不能创建以「.」开头的名称（目录树不显示隐藏文件）')
+  }
+}
+
+/** /api/asset 只服务这些类型。刻意不做成通用文件读取接口。 */
+const ASSET_MIME = {
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.gif': 'image/gif',
+  '.webp': 'image/webp',
+  '.avif': 'image/avif',
+  '.bmp': 'image/bmp',
+  '.ico': 'image/x-icon',
+  '.svg': 'image/svg+xml'
+}
+
+/** 递归遍历根目录下的可搜索文本文件 */
+async function* walkTextFiles(dir, depth = 0) {
+  if (depth > 12) return
+  let entries
+  try {
+    entries = await fsp.readdir(dir, { withFileTypes: true })
+  } catch {
+    return
+  }
+
+  for (const entry of entries) {
+    if (entry.name.startsWith('.') || IGNORED_DIRS.has(entry.name)) continue
+    const abs = path.join(dir, entry.name)
+
+    if (entry.isDirectory()) {
+      yield* walkTextFiles(abs, depth + 1)
+    } else if (entry.isFile() && isTextFile(entry.name)) {
+      yield abs
+    }
   }
 }
 
@@ -277,6 +314,11 @@ const api = {
     config.root = abs
     config.recentRoots = [abs, ...config.recentRoots.filter((r) => r !== abs)].slice(0, 10)
     persistConfig()
+
+    // 换了根目录，之前监视的路径全部失效
+    watchedFiles.clear()
+    closeAllWatchers()
+
     return { root: config.root, recentRoots: config.recentRoots }
   },
 
@@ -400,6 +442,105 @@ const api = {
     return { path: toRelative(abs), trashedAs }
   },
 
+  // ------------------------------------------------------------ 全文搜索
+
+  /**
+   * 全文搜索。刻意用纯 Node 实现而不是 ripgrep —— ripgrep 是平台专属二进制，
+   * 放进公开仓库只有一种架构能用。markdown 笔记这个量级纯 Node 完全够。
+   */
+  async 'GET /api/search'(query) {
+    const needle = String(query.q || '')
+    if (!needle.trim()) return { matches: [], files: 0, truncated: false }
+
+    const caseSensitive = query.case === '1'
+    const limit = Math.min(Math.max(Number(query.limit) || 200, 1), 1000)
+    const MAX_FILES = 4000
+    const MAX_FILE_BYTES = 2 * 1024 * 1024
+
+    let pattern
+    try {
+      pattern = new RegExp(query.regex === '1' ? needle : escapeRegExp(needle), caseSensitive ? 'g' : 'gi')
+    } catch (err) {
+      throw new HttpError(400, `正则表达式不合法：${err.message}`)
+    }
+
+    const matches = []
+    let files = 0
+    let truncated = false
+
+    for await (const abs of walkTextFiles(config.root)) {
+      if (files >= MAX_FILES || matches.length >= limit) {
+        truncated = true
+        break
+      }
+      files++
+
+      const stat = await fsp.stat(abs).catch(() => null)
+      if (!stat || stat.size > MAX_FILE_BYTES) continue
+
+      const text = await fsp.readFile(abs, 'utf8').catch(() => null)
+      if (text === null || text.includes('\0')) continue
+
+      const lines = text.split('\n')
+      for (let i = 0; i < lines.length && matches.length < limit; i++) {
+        pattern.lastIndex = 0
+        if (!pattern.test(lines[i])) continue
+        matches.push({
+          path: toRelative(abs),
+          name: path.basename(abs),
+          line: i + 1,
+          text: lines[i].length > 300 ? `${lines[i].slice(0, 300)}…` : lines[i]
+        })
+      }
+    }
+
+    return { matches, files, truncated }
+  },
+
+  // ------------------------------------------------------------ 本地图片
+
+  /**
+   * 服务根目录内的图片。刻意只允许图片类型 —— 不做成通用文件读取接口，
+   * 免得变成一个能读任意文件的口子。
+   */
+  async 'GET /api/asset'(query) {
+    const abs = resolveInsideRoot(query.path)
+    const mime = ASSET_MIME[path.extname(abs).toLowerCase()]
+    if (!mime) throw new HttpError(415, '只支持图片类型')
+
+    const stat = await fsp.stat(abs).catch(() => null)
+    if (!stat || !stat.isFile()) throw new HttpError(404, '图片不存在')
+
+    return { __raw: abs, mime, size: stat.size }
+  },
+
+  /** 在访达中定位该文件（仅 macOS） */
+  async 'POST /api/reveal'(body) {
+    if (process.platform !== 'darwin') {
+      throw new HttpError(400, '这个功能目前只在 macOS 上可用')
+    }
+    const abs = resolveInsideRoot(body.path)
+    if (!(await exists(abs))) throw new HttpError(404, `不存在：${toRelative(abs)}`)
+
+    execFile('open', ['-R', abs], (err) => {
+      if (err) console.warn('[edgeMark] 访达定位失败：', err.message)
+    })
+    return { ok: true }
+  },
+
+  // ------------------------------------------------------------ 外部改动监听
+
+  /** 设置要监视的文件清单（相对根目录）。前端在标签页增删时调用。 */
+  async 'POST /api/watch'(body) {
+    const paths = Array.isArray(body.paths) ? body.paths : []
+    watchedFiles.clear()
+    for (const p of paths) {
+      if (typeof p === 'string' && p) watchedFiles.add(p)
+    }
+    refreshWatchers()
+    return { watching: watchedFiles.size }
+  },
+
   // ------------------------------------------------------------ 自检
 
   /**
@@ -446,6 +587,80 @@ const api = {
   }
 }
 
+// ---------------------------------------------------------------- 外部改动监听
+
+/**
+ * 监听已打开文件在磁盘上的改动。
+ *
+ * 关键是**监听文件所在的目录**而不是文件本身：多数编辑器保存是「写临时文件 + 原子重命名」，
+ * 直接监听文件会在第一次保存后就丢掉 watch。监听目录再比对文件名才稳。
+ */
+const watchedFiles = new Set()
+const dirWatchers = new Map()
+const watchClients = new Set()
+const pendingNotify = new Map()
+
+function broadcastFileChanged(relPath) {
+  for (const res of watchClients) {
+    try {
+      res.write(`data: ${JSON.stringify({ path: relPath })}\n\n`)
+    } catch {
+      /* 连接已断，交给 close 清理 */
+    }
+  }
+}
+
+/** 编辑器一次保存会连发好几个事件，合并一下 */
+function scheduleNotify(relPath) {
+  clearTimeout(pendingNotify.get(relPath))
+  pendingNotify.set(
+    relPath,
+    setTimeout(() => {
+      pendingNotify.delete(relPath)
+      broadcastFileChanged(relPath)
+    }, 150)
+  )
+}
+
+function refreshWatchers() {
+  const needed = new Set()
+  for (const rel of watchedFiles) {
+    needed.add(path.dirname(path.resolve(config.root, rel)))
+  }
+
+  for (const [dir, watcher] of dirWatchers) {
+    if (!needed.has(dir)) {
+      watcher.close()
+      dirWatchers.delete(dir)
+    }
+  }
+
+  for (const dir of needed) {
+    if (dirWatchers.has(dir)) continue
+    try {
+      const watcher = fs.watch(dir, (_event, filename) => {
+        if (!filename) return
+        const rel = toRelative(path.join(dir, filename))
+        if (watchedFiles.has(rel)) scheduleNotify(rel)
+      })
+      watcher.on('error', () => {
+        watcher.close()
+        dirWatchers.delete(dir)
+      })
+      dirWatchers.set(dir, watcher)
+    } catch {
+      /* 目录不可监听就跳过，不影响其它功能 */
+    }
+  }
+}
+
+function closeAllWatchers() {
+  for (const [, watcher] of dirWatchers) watcher.close()
+  dirWatchers.clear()
+  for (const timer of pendingNotify.values()) clearTimeout(timer)
+  pendingNotify.clear()
+}
+
 // ---------------------------------------------------------------- AI 对话代理
 /**
  * 用户填的可能是 API 根地址（https://api.openai.com/v1），
@@ -487,6 +702,23 @@ function extractDelta(payload) {
 }
 
 const streamApi = {
+  /** 订阅「已打开文件在磁盘上被改动」（SSE，长连接） */
+  async 'GET /api/watch'(body, req, res) {
+    res.writeHead(200, {
+      'Content-Type': 'text/event-stream; charset=utf-8',
+      'Cache-Control': 'no-cache',
+      Connection: 'keep-alive'
+    })
+    res.write(': connected\n\n')
+    watchClients.add(res)
+
+    res.on('close', () => {
+      watchClients.delete(res)
+      res.end()
+    })
+    // 刻意不 end：这条连接要一直挂着
+  },
+
   /** 转发一次对话请求，流式回传给浏览器 */
   async 'POST /api/ai/chat'(body, req, res) {
     const { baseUrl, model, apiKey } = config.ai
@@ -604,22 +836,69 @@ const MIME = {
   '.otf': 'font/otf'
 }
 
+/** 静态资源的扩展名。命中这些却在 public/ 里找不到时，直接 404，不做 SPA 回退，
+    否则写错资源路径会拿到一个 HTML，报错信息会非常难懂。 */
+const STATIC_EXTENSIONS = new Set([
+  '.js', '.mjs', '.css', '.json', '.map', '.woff', '.woff2', '.ttf', '.otf',
+  '.ico', '.png', '.gif', '.jpg', '.jpeg', '.webp', '.avif', '.bmp', '.svg',
+  '.txt', '.xml'
+])
+
+async function sendFile(res, abs, mime, size) {
+  const headers = {
+    'Content-Type': mime,
+    'Content-Length': size,
+    'Cache-Control': 'no-cache',
+    'X-Content-Type-Options': 'nosniff'
+  }
+  // SVG 里可能有脚本；它只该被 <img> 引用，不该被当文档打开
+  if (mime === 'image/svg+xml') {
+    headers['Content-Security-Policy'] = "sandbox; default-src 'none'; style-src 'unsafe-inline'"
+  }
+  res.writeHead(200, headers)
+  fs.createReadStream(abs).pipe(res)
+}
+
 async function serveStatic(req, res, pathname) {
   const rel = pathname === '/' ? 'index.html' : decodeURIComponent(pathname).replace(/^\/+/, '')
-  const abs = path.resolve(PUBLIC_DIR, rel)
-  if (abs !== PUBLIC_DIR && !abs.startsWith(PUBLIC_DIR + path.sep)) {
-    throw new HttpError(403, '非法路径')
+
+  // 1) public/ 下的静态资源
+  const pubAbs = path.resolve(PUBLIC_DIR, rel)
+  if (pubAbs === PUBLIC_DIR || pubAbs.startsWith(PUBLIC_DIR + path.sep)) {
+    const stat = await fsp.stat(pubAbs).catch(() => null)
+    if (stat && stat.isFile()) {
+      await sendFile(res, pubAbs, MIME[path.extname(pubAbs).toLowerCase()] || 'application/octet-stream', stat.size)
+      return
+    }
   }
 
-  const stat = await fsp.stat(abs).catch(() => null)
-  if (!stat || !stat.isFile()) throw new HttpError(404, 'Not Found')
+  // 2) 图片：按根目录解析。
+  //    页面 URL 会跟着当前文件走（例如 /sub/notes.md），所以 markdown 里的相对图片
+  //    路径会被浏览器解析成 /sub/images/a.png，正好落到这里。
+  //    这样就不必去改 DOM 里的 img src —— Vditor 的 getValue() 是从 innerHTML
+  //    反推 markdown 的，改 src 会被写回文档、污染用户的文件。
+  const assetMime = ASSET_MIME[path.extname(rel).toLowerCase()]
+  if (assetMime) {
+    let abs = null
+    try {
+      abs = resolveInsideRoot(rel)
+    } catch {
+      abs = null
+    }
+    const stat = abs ? await fsp.stat(abs).catch(() => null) : null
+    if (stat && stat.isFile()) {
+      await sendFile(res, abs, assetMime, stat.size)
+      return
+    }
+  }
 
-  res.writeHead(200, {
-    'Content-Type': MIME[path.extname(abs).toLowerCase()] || 'application/octet-stream',
-    'Content-Length': stat.size,
-    'Cache-Control': 'no-cache'
-  })
-  fs.createReadStream(abs).pipe(res)
+  // 3) 其余当作页面地址，回 index.html（单页应用回退）
+  const ext = path.extname(rel).toLowerCase()
+  if (STATIC_EXTENSIONS.has(ext)) throw new HttpError(404, 'Not Found')
+
+  const indexAbs = path.join(PUBLIC_DIR, 'index.html')
+  const indexStat = await fsp.stat(indexAbs)
+  await sendFile(res, indexAbs, MIME['.html'], indexStat.size)
 }
 
 // ---------------------------------------------------------------- 服务器
@@ -638,7 +917,15 @@ const server = http.createServer(async (req, res) => {
     if (api[route]) {
       const query = Object.fromEntries(url.searchParams)
       const body = req.method === 'GET' ? {} : await readBody(req)
-      json(res, 200, await api[route](req.method === 'GET' ? query : body))
+      const result = await api[route](req.method === 'GET' ? query : body)
+
+      // 少数接口要直接回文件而不是 JSON（目前只有 /api/asset）
+      if (result && result.__raw) {
+        await sendFile(res, result.__raw, result.mime, result.size)
+        return
+      }
+
+      json(res, 200, result)
       return
     }
     if (url.pathname.startsWith('/api/')) throw new HttpError(404, '未知接口')

@@ -65,6 +65,26 @@ const els = {
   // 标签栏
   tabbar: $('#tabbar'),
   tabs: $('#tabs'),
+  btnTabList: $('#btn-tab-list'),
+  tabListPanel: $('#tab-list-panel'),
+
+  // 工具栏「更多」菜单
+  btnMore: $('#btn-more'),
+  moreMenu: $('#more-menu'),
+  menuTheme: $('#menu-theme'),
+  menuAutosave: $('#menu-autosave'),
+  menuExportHtml: $('#menu-export-html'),
+  menuExportPdf: $('#menu-export-pdf'),
+
+  // 全文搜索
+  btnSearch: $('#btn-search'),
+  searchBar: $('#search-bar'),
+  searchInput: $('#search-input'),
+  btnSearchClose: $('#btn-search-close'),
+  searchResults: $('#search-results'),
+
+  // 目录树右键菜单
+  contextMenu: $('#context-menu'),
 
   // 右侧面板
   source: $('#source'),
@@ -178,6 +198,7 @@ sourceEditor.on('change', () => {
   if (!tab) return
 
   refreshDirty(tab, sourceEditor.getValue())
+  scheduleAutosave()
   scheduleWysiwygSync()
 })
 
@@ -233,7 +254,8 @@ const vditor = new window.Vditor('wysiwyg', {
   cdn: '/vendor/vditor',
   lang: 'zh_CN',
   icon: 'ant',
-  theme: 'classic',
+  // 直接按保存的偏好初始化，避免先亮一下再切
+  theme: readPref(PREF_KEYS.theme, 'light') === 'dark' ? 'dark' : 'classic',
   height: '100%',
   value: '',
   placeholder: '从左侧目录里选一个文件…',
@@ -251,6 +273,7 @@ const vditor = new window.Vditor('wysiwyg', {
   ],
   after() {
     if (resolveVditorReady) {
+      vditorIsReady = true
       resolveVditorReady()
       resolveVditorReady = null
     }
@@ -317,6 +340,7 @@ function onWysiwygInput(value) {
   state.syncing = false
 
   refreshDirty(tab, value)
+  scheduleAutosave()
 }
 
 /**
@@ -376,6 +400,281 @@ els.wysiwyg.addEventListener(
   },
   true
 )
+
+// ---------------------------------------------------------------- 偏好设置
+
+/** 这些是纯界面偏好，放 localStorage 就够，不必占用服务端配置 */
+const PREF_KEYS = { theme: 'edgemark.theme', autosave: 'edgemark.autosave' }
+
+function readPref(key, fallback) {
+  try {
+    return localStorage.getItem(key) ?? fallback
+  } catch {
+    return fallback
+  }
+}
+
+function writePref(key, value) {
+  try {
+    localStorage.setItem(key, value)
+  } catch {
+    /* 隐私模式下可能写不了，忽略 */
+  }
+}
+
+// ---------------------------------------------------------------- 主题
+
+let vditorIsReady = false
+let currentTheme = 'light'
+
+function applyTheme(theme) {
+  currentTheme = theme === 'dark' ? 'dark' : 'light'
+  const dark = currentTheme === 'dark'
+
+  document.documentElement.dataset.theme = currentTheme
+  $('#css-markdown').href = dark ? '/vendor/github-markdown-dark.css' : '/vendor/github-markdown-light.css'
+  $('#css-prism').href = dark ? '/vendor/prism/themes/prism-tomorrow.css' : '/vendor/prism/themes/prism.css'
+  $('#css-cm-theme').href = dark ? '/vendor/codemirror/theme/dracula.css' : '/vendor/codemirror/theme/eclipse.css'
+
+  sourceEditor.setOption('theme', dark ? 'dracula' : 'eclipse')
+  // Vditor 在资源加载完之前不能切主题
+  if (vditorIsReady) vditor.setTheme(dark ? 'dark' : 'classic')
+
+  els.menuTheme.classList.toggle('is-on', dark)
+  els.menuTheme.textContent = dark ? '浅色主题' : '深色主题'
+  writePref(PREF_KEYS.theme, currentTheme)
+}
+
+// ---------------------------------------------------------------- 页面地址
+
+/**
+ * 让页面 URL 跟着当前文件走（例如 /sub/notes.md）。
+ *
+ * 这不是为了好看 —— 是本地图片能显示的关键：markdown 里的相对图片路径
+ * `images/a.png` 会被浏览器按当前地址解析成 `/sub/images/a.png`，
+ * 服务端再从根目录把这张图发出来。这样就不必去改 DOM 里的 img src，
+ * 而 Vditor 的 getValue() 是从 innerHTML 反推 markdown 的，
+ * 改 src 会被写回文档、污染用户的文件。
+ */
+function syncPageUrl() {
+  const tab = activeTab()
+  const target = tab ? `/${tab.path.split('/').map(encodeURIComponent).join('/')}` : '/'
+  if (location.pathname !== target) {
+    history.replaceState(null, '', target)
+  }
+}
+
+// ---------------------------------------------------------------- 自动保存
+
+let autosaveEnabled = readPref(PREF_KEYS.autosave, '0') === '1'
+let autosaveTimer = null
+
+function setAutosave(enabled) {
+  autosaveEnabled = enabled
+  writePref(PREF_KEYS.autosave, enabled ? '1' : '0')
+  els.menuAutosave.classList.toggle('is-on', enabled)
+  if (!enabled) clearTimeout(autosaveTimer)
+}
+
+function scheduleAutosave() {
+  if (!autosaveEnabled) return
+  clearTimeout(autosaveTimer)
+  autosaveTimer = setTimeout(() => {
+    const tab = activeTab()
+    if (tab && tab.dirty && !ai.streaming) save({ silent: true })
+  }, 1200)
+}
+
+// ---------------------------------------------------------------- 外部改动监听
+
+/**
+ * 已打开的文件在磁盘上被别的程序改动时，服务端会推过来。
+ * 标签是干净的 → 自动重载；有未保存改动 → 提示冲突，**不静默覆盖**。
+ */
+function connectWatcher() {
+  const source = new EventSource('/api/watch')
+
+  source.addEventListener('message', async (e) => {
+    let payload
+    try {
+      payload = JSON.parse(e.data)
+    } catch {
+      return
+    }
+
+    const tab = state.tabs.find((t) => t.path === payload.path)
+    if (!tab) return
+    // 自己刚保存触发的改动，忽略
+    if (Date.now() - tab.lastSavedAt < 1500) return
+
+    if (tab.dirty) {
+      setStatus(`「${tab.name}」在磁盘上被外部修改了，你有未保存的改动`, 'dirty')
+      return
+    }
+
+    try {
+      const file = await api.get('/api/file', { path: tab.path })
+      if (file.content === tab.doc.getValue()) return
+
+      state.syncing = true
+      tab.doc.setValue(file.content)
+      state.syncing = false
+
+      if (tab.id === state.activeId) await syncToWysiwyg(file.content, false)
+      setStatus(`「${tab.name}」已在磁盘上更新，已重新载入`)
+    } catch (err) {
+      setStatus(`重新载入失败：${err.message}`)
+    }
+  })
+
+  // EventSource 会自己重连，这里只提示一下
+  source.addEventListener('error', () => {
+    if (source.readyState === EventSource.CLOSED) setStatus('与服务端的连接已断开')
+  })
+}
+
+let watchSyncTimer = null
+
+/** 标签增删时同步监视清单，防抖避免频繁请求 */
+function scheduleWatchSync() {
+  clearTimeout(watchSyncTimer)
+  watchSyncTimer = setTimeout(syncWatchList, 300)
+}
+
+/** 把当前打开的标签同步给服务端，只监视这些文件 */
+function syncWatchList() {
+  api.post('/api/watch', { paths: state.tabs.map((t) => t.path) }).catch(() => {})
+}
+
+// ---------------------------------------------------------------- 导出
+
+function exportHtml() {
+  const tab = activeTab()
+  if (!tab) return
+
+  const body = md.render(tab.doc.getValue())
+  const dark = currentTheme === 'dark'
+  const styleHref = dark ? '/vendor/github-markdown-dark.css' : '/vendor/github-markdown-light.css'
+
+  const html = `<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>${escapeHtml(tab.name)}</title>
+<link rel="stylesheet" href="${styleHref}">
+<style>
+  body { margin: 0; background: ${dark ? '#0d1117' : '#fff'}; }
+  .markdown-body { box-sizing: border-box; max-width: 900px; margin: 0 auto; padding: 40px 24px 80px; }
+</style>
+</head>
+<body class="markdown-body">
+${body}
+</body>
+</html>`
+
+  downloadBlob(html, `${stripExt(tab.name)}.html`, 'text/html;charset=utf-8')
+}
+
+function exportPdf() {
+  const tab = activeTab()
+  if (!tab) return
+
+  // 直接 window.print() 会把工具栏、目录树一起打进去，
+  // 所以先把渲染结果放进一个只用于打印的容器，打印期间把其它元素藏起来。
+  let holder = document.getElementById('print-holder')
+  if (!holder) {
+    holder = document.createElement('div')
+    holder.id = 'print-holder'
+    holder.className = 'markdown-body'
+    document.body.appendChild(holder)
+  }
+  holder.innerHTML = md.render(tab.doc.getValue())
+
+  // 深色样式打出来是一片黑底，打印时临时换回浅色
+  const wasDark = currentTheme === 'dark'
+  if (wasDark) $('#css-markdown').href = '/vendor/github-markdown-light.css'
+
+  document.body.classList.add('is-printing')
+  setStatus('在打印对话框里选择「另存为 PDF」')
+  window.print()
+
+  document.body.classList.remove('is-printing')
+  holder.innerHTML = ''
+  if (wasDark) $('#css-markdown').href = '/vendor/github-markdown-dark.css'
+}
+
+function downloadBlob(text, filename, mime) {
+  const url = URL.createObjectURL(new Blob([text], { type: mime }))
+  const a = document.createElement('a')
+  a.href = url
+  a.download = filename
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+  setTimeout(() => URL.revokeObjectURL(url), 1000)
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c])
+}
+
+// ---------------------------------------------------------------- 下拉菜单
+
+const openMenus = new Set()
+
+function setMenu(panel, open) {
+  panel.hidden = !open
+  if (open) openMenus.add(panel)
+  else openMenus.delete(panel)
+}
+
+function closeAllMenus() {
+  for (const panel of [...openMenus]) setMenu(panel, false)
+}
+
+function toggleMenu(panel) {
+  const willOpen = panel.hidden
+  closeAllMenus()
+  setMenu(panel, willOpen)
+}
+
+document.addEventListener('click', (e) => {
+  // 点在菜单内部不关；点其他地方一律关掉
+  for (const panel of openMenus) {
+    if (panel.contains(e.target)) return
+  }
+  if (e.target.closest('#btn-more, #btn-tab-list')) return
+  closeAllMenus()
+})
+
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') closeAllMenus()
+})
+
+els.btnMore.addEventListener('click', (e) => {
+  e.stopPropagation()
+  toggleMenu(els.moreMenu)
+})
+
+els.menuTheme.addEventListener('click', () => {
+  applyTheme(currentTheme === 'dark' ? 'light' : 'dark')
+  closeAllMenus()
+})
+
+els.menuAutosave.addEventListener('click', () => {
+  setAutosave(!autosaveEnabled)
+  closeAllMenus()
+})
+
+els.menuExportHtml.addEventListener('click', () => {
+  closeAllMenus()
+  exportHtml()
+})
+
+els.menuExportPdf.addEventListener('click', () => {
+  closeAllMenus()
+  exportPdf()
+})
 
 // ---------------------------------------------------------------- 状态显示
 
@@ -444,6 +743,8 @@ function renderTabs() {
   }
 
   els.tabbar.classList.toggle('is-empty', state.tabs.length === 0)
+  scheduleWatchSync()
+  updateTabOverflow()
 }
 
 async function activateTab(id) {
@@ -466,6 +767,11 @@ async function activateTab(id) {
   renderTabs()
   updateSaveButton()
   setStatus(tab.dirty ? '有未保存的修改' : '已保存', tab.dirty ? 'dirty' : '')
+
+  // 页面地址跟着文件走，这样 markdown 里的相对图片路径才能被解析到正确位置
+  syncPageUrl()
+  // 每个文件一套独立的对话
+  switchAiHistory(tab.path)
 }
 
 function closeTab(id) {
@@ -511,6 +817,9 @@ async function showEmptyState() {
   renderTabs()
   updateSaveButton()
   setStatus('')
+
+  syncPageUrl()
+  switchAiHistory(null)
 }
 
 // ---------------------------------------------------------------- 目录树
@@ -579,6 +888,8 @@ function createRow(entry, depth) {
   row.dataset.path = entry.path
   row.style.paddingLeft = `${8 + depth * 14}px`
   if (entry.type === 'file') row.dataset.filePath = entry.path
+  // 可拖拽：拖到别的目录上就是移动
+  row.draggable = true
 
   const arrow = document.createElement('span')
   arrow.className = 'tree__arrow'
@@ -872,7 +1183,9 @@ async function openFile(entry) {
       name: file.name,
       doc: window.CodeMirror.Doc(file.content, 'gfm'),
       savedContent: file.content,
-      dirty: false
+      dirty: false,
+      /** 最近一次落盘时间，用来忽略「自己保存」触发的文件变化通知 */
+      lastSavedAt: 0
     })
 
     await activateTab(state.tabs[state.tabs.length - 1].id)
@@ -881,21 +1194,22 @@ async function openFile(entry) {
   }
 }
 
-async function save() {
+async function save({ silent = false } = {}) {
   const tab = activeTab()
   if (!tab) return
 
   // doc 是内容真源，Vditor 的改动会立即写进来
   const content = tab.doc.getValue()
-  setStatus('保存中…')
+  if (!silent) setStatus('保存中…')
   try {
     await api.put('/api/file', { path: tab.path, content })
     tab.savedContent = content
     tab.dirty = false
+    tab.lastSavedAt = Date.now()
     renderTabs()
     updateSaveButton()
     const time = new Date().toLocaleTimeString('zh-CN', { hour12: false })
-    setStatus(`已保存 ${time}`)
+    setStatus(`${silent ? '已自动保存' : '已保存'} ${time}`)
   } catch (err) {
     setStatus(`保存失败：${err.message}`)
   }
@@ -1137,10 +1451,29 @@ const AI_DOC_LIMIT = 60000
 
 const ai = {
   config: { baseUrl: '', model: '', hasApiKey: false },
-  /** [{ role: 'user' | 'assistant', content }]，只存对话本身，文档每次都重新取 */
+  /**
+   * 按文件隔离的对话历史：文件路径 → [{ role, content, edits }]。
+   * 切标签会换一整套会话，避免「上一条消息用的还是旧文件的上下文」这种困惑。
+   */
+  histories: new Map(),
+  /** 当前正在用的那套（就是 histories 里的某个数组） */
   history: [],
+  /** 当前历史对应的文件路径，'' 表示没有打开文件 */
+  key: '',
   streaming: false,
   controller: null
+}
+
+/** 切换当前对话到某个文件的历史 */
+function switchAiHistory(path) {
+  const nextKey = path || ''
+
+  // 先把当前这套存回去
+  if (ai.key && ai.history.length) ai.histories.set(ai.key, ai.history)
+
+  ai.key = nextKey
+  ai.history = ai.histories.get(nextKey) || []
+  renderAiMessages()
 }
 
 /**
@@ -1188,6 +1521,9 @@ function aiMessageEl(message) {
   if (message.role === 'assistant' && message.edits && message.edits.length && !message.dismissed) {
     el.appendChild(editsCard(message))
   }
+
+  // 回答里的行内代码能对上原文的，做成可点击的跳转
+  if (message.role === 'assistant') linkifyAiCode(body)
 
   return el
 }
@@ -1318,7 +1654,12 @@ async function applyMessageEdits(message) {
   message.applied = true
   message.appliedCount = applied
   renderAiMessages()
-  setStatus(`已应用 ${applied} 处修改，按 ⌘S 保存`)
+
+  // 焦点挪到源码面板：Vditor 没有公开的撤销栈 API，我们改不了它的撤销记录，
+  // 但源码面板的撤销历史是好的，⌘Z 在这里立刻可用。
+  showRightPane('source')
+  sourceEditor.focus()
+  setStatus(`已应用 ${applied} 处修改，按 ⌘S 保存；⌘Z 可撤销`)
 }
 
 function renderAiMessages() {
@@ -1481,8 +1822,10 @@ els.aiInput.addEventListener('keydown', (e) => {
 })
 
 els.btnAiClear.addEventListener('click', () => {
-  if (ai.history.length && !confirm('清空当前对话？')) return
+  if (ai.history.length && !confirm('清空当前文件的对话？')) return
   ai.history = []
+  // 也要从按文件存的表里删掉，否则切走再切回来又冒出来了
+  if (ai.key) ai.histories.delete(ai.key)
   renderAiMessages()
 })
 
@@ -1691,6 +2034,359 @@ document.querySelectorAll('.splitter').forEach((splitter) => {
   })
 })
 
+// ---------------------------------------------------------------- 标签溢出下拉
+
+/** 标签总宽超出可视区域时，显示下拉按钮列出全部标签 */
+function updateTabOverflow() {
+  const overflow = els.tabs.scrollWidth > els.tabs.clientWidth + 1
+  els.btnTabList.hidden = !overflow || state.tabs.length === 0
+  if (!overflow) setMenu(els.tabListPanel, false)
+}
+
+els.btnTabList.addEventListener('click', (e) => {
+  e.stopPropagation()
+  const willOpen = els.tabListPanel.hidden
+  closeAllMenus()
+  if (!willOpen) return
+
+  els.tabListPanel.innerHTML = ''
+  for (const tab of state.tabs) {
+    const item = document.createElement('button')
+    item.type = 'button'
+    item.className = tab.dirty ? 'menu__item is-on' : 'menu__item'
+    item.textContent = tab.path
+    item.title = tab.path
+    item.addEventListener('click', () => {
+      activateTab(tab.id)
+      closeAllMenus()
+    })
+    els.tabListPanel.appendChild(item)
+  }
+  setMenu(els.tabListPanel, true)
+})
+
+new ResizeObserver(() => updateTabOverflow()).observe(els.tabs)
+
+// ---------------------------------------------------------------- 右键菜单
+
+function menuItem(label, action, disabled = false) {
+  const item = document.createElement('button')
+  item.type = 'button'
+  item.className = 'menu__item'
+  item.textContent = label
+  item.disabled = disabled
+  item.addEventListener('click', () => {
+    closeAllMenus()
+    action()
+  })
+  return item
+}
+
+function menuSep() {
+  const sep = document.createElement('div')
+  sep.className = 'menu__sep'
+  return sep
+}
+
+function showContextMenu(x, y, entry) {
+  els.contextMenu.innerHTML = ''
+
+  // 新建的目标目录：右键目录就放进去，右键文件就放在它旁边
+  const dir = entry.type === 'dir' ? entry.path : dirName(entry.path)
+
+  els.contextMenu.appendChild(
+    menuItem('新建文件', () => {
+      selectedDir = dir
+      createFile()
+    })
+  )
+  els.contextMenu.appendChild(
+    menuItem('新建文件夹', () => {
+      selectedDir = dir
+      createDir()
+    })
+  )
+  els.contextMenu.appendChild(menuSep())
+  els.contextMenu.appendChild(menuItem('重命名', () => renameEntry(entry)))
+  els.contextMenu.appendChild(menuItem('删除（移入废纸篓）', () => deleteEntry(entry)))
+  els.contextMenu.appendChild(menuSep())
+  els.contextMenu.appendChild(
+    menuItem('在访达中显示', () => {
+      api.post('/api/reveal', { path: entry.path }).catch((err) => alert(`无法定位：${err.message}`))
+    })
+  )
+
+  // 先显示再量尺寸，避免算出屏幕外的位置
+  els.contextMenu.style.left = '0px'
+  els.contextMenu.style.top = '0px'
+  setMenu(els.contextMenu, true)
+
+  const rect = els.contextMenu.getBoundingClientRect()
+  els.contextMenu.style.left = `${Math.max(4, Math.min(x, window.innerWidth - rect.width - 4))}px`
+  els.contextMenu.style.top = `${Math.max(4, Math.min(y, window.innerHeight - rect.height - 4))}px`
+}
+
+els.tree.addEventListener('contextmenu', (e) => {
+  const row = e.target.closest('.tree__row')
+  if (!row) return
+  e.preventDefault()
+
+  const path = row.dataset.path
+  const isFile = Boolean(row.dataset.filePath)
+  showContextMenu(e.clientX, e.clientY, {
+    path,
+    name: baseName(path),
+    type: isFile ? 'file' : 'dir'
+  })
+})
+
+// ---------------------------------------------------------------- 拖拽移动
+
+let dragSource = null
+let dragRowEl = null
+let dropRowEl = null
+
+/** 能不能把 source 移到 targetDir 里 */
+function canDrop(source, targetDir) {
+  if (!source) return false
+  // 原地不动
+  if (dirName(source.path) === targetDir) return false
+  // 目录不能放进自己或自己的子孙里
+  if (source.type === 'dir') {
+    if (targetDir === source.path) return false
+    if (targetDir.startsWith(source.path + '/')) return false
+  }
+  return true
+}
+
+function clearDropMarks() {
+  if (dragRowEl) dragRowEl.classList.remove('is-dragging')
+  if (dropRowEl) dropRowEl.classList.remove('is-drop-target')
+  dropRowEl = null
+}
+
+els.tree.addEventListener('dragstart', (e) => {
+  const row = e.target.closest('.tree__row')
+  if (!row) return
+
+  dragSource = { path: row.dataset.path, type: row.dataset.filePath ? 'file' : 'dir' }
+  dragRowEl = row
+  row.classList.add('is-dragging')
+  e.dataTransfer.effectAllowed = 'move'
+  // 必须设一点数据，否则部分浏览器不会触发后续的拖放事件
+  e.dataTransfer.setData('text/plain', dragSource.path)
+})
+
+els.tree.addEventListener('dragend', () => {
+  dragSource = null
+  clearDropMarks()
+  dragRowEl = null
+})
+
+els.tree.addEventListener('dragover', (e) => {
+  if (!dragSource) return
+  const row = e.target.closest('.tree__row')
+
+  // dragover 触发非常频繁，只在目标真的换了时才动 DOM
+  if (row !== dropRowEl) {
+    if (dropRowEl) dropRowEl.classList.remove('is-drop-target')
+    dropRowEl = row
+    if (row) {
+      const targetDir = row.dataset.filePath ? dirName(row.dataset.path) : row.dataset.path
+      if (canDrop(dragSource, targetDir)) row.classList.add('is-drop-target')
+    }
+  }
+
+  if (!row) return
+  const targetDir = row.dataset.filePath ? dirName(row.dataset.path) : row.dataset.path
+  if (!canDrop(dragSource, targetDir)) return
+
+  e.preventDefault()
+  e.dataTransfer.dropEffect = 'move'
+})
+
+els.tree.addEventListener('dragleave', (e) => {
+  if (!els.tree.contains(e.relatedTarget)) clearDropMarks()
+})
+
+els.tree.addEventListener('drop', async (e) => {
+  const source = dragSource
+  clearDropMarks()
+  if (!source) return
+
+  const row = e.target.closest('.tree__row')
+  if (!row) return
+
+  const targetDir = row.dataset.filePath ? dirName(row.dataset.path) : row.dataset.path
+  if (!canDrop(source, targetDir)) return
+  e.preventDefault()
+
+  const to = joinPath(targetDir, baseName(source.path))
+  try {
+    const res = await api.post('/api/rename', { path: source.path, to })
+    if (targetDir !== '.') expandedDirs.add(targetDir)
+    afterPathChange(res.from, res.to)
+  } catch (err) {
+    alert(`移动失败：${err.message}`)
+  }
+})
+
+// ---------------------------------------------------------------- 全文搜索
+
+let searchTimer = null
+
+function openSearch() {
+  els.searchBar.hidden = false
+  els.tree.hidden = true
+  els.searchResults.hidden = false
+  els.searchInput.focus()
+  els.searchInput.select()
+}
+
+function closeSearch() {
+  els.searchBar.hidden = true
+  els.tree.hidden = false
+  els.searchResults.hidden = true
+  els.searchInput.value = ''
+  els.searchResults.innerHTML = ''
+}
+
+async function runSearch() {
+  const query = els.searchInput.value.trim()
+  els.searchResults.innerHTML = ''
+
+  if (!query) return
+  els.searchResults.appendChild(hint('搜索中…', 'search-empty'))
+
+  let data
+  try {
+    data = await api.get('/api/search', { q: query })
+  } catch (err) {
+    els.searchResults.innerHTML = ''
+    els.searchResults.appendChild(hint(`搜索失败：${err.message}`, 'search-empty'))
+    return
+  }
+
+  els.searchResults.innerHTML = ''
+
+  if (!data.matches.length) {
+    els.searchResults.appendChild(hint(`没有找到「${query}」（扫描了 ${data.files} 个文件）`, 'search-empty'))
+    return
+  }
+  if (data.truncated) {
+    els.searchResults.appendChild(hint(`结果过多，只显示前 ${data.matches.length} 条`, 'search-empty'))
+  }
+
+  for (const match of data.matches) {
+    els.searchResults.appendChild(searchHitEl(match, query))
+  }
+}
+
+function searchHitEl(match, query) {
+  const el = document.createElement('div')
+  el.className = 'search-hit'
+  el.title = `${match.path}:${match.line}`
+
+  const head = document.createElement('div')
+  head.className = 'search-hit__head'
+  head.textContent = `${match.path}:${match.line}`
+  el.appendChild(head)
+
+  const line = document.createElement('div')
+  line.className = 'search-hit__line'
+
+  const text = match.text.trim()
+  const idx = text.toLowerCase().indexOf(query.toLowerCase())
+  if (idx === -1) {
+    line.textContent = text
+  } else {
+    line.innerHTML =
+      escapeHtml(text.slice(0, idx)) +
+      `<mark>${escapeHtml(text.slice(idx, idx + query.length))}</mark>` +
+      escapeHtml(text.slice(idx + query.length))
+  }
+  el.appendChild(line)
+
+  el.addEventListener('click', () => jumpToLine(match.path, match.line))
+  return el
+}
+
+/** 打开文件并定位到指定行 */
+async function jumpToLine(path, line) {
+  await openFile({ path, name: baseName(path), type: 'file' })
+  showRightPane('source')
+  revealLine(line - 1)
+  closeSearch()
+}
+
+function revealLine(line) {
+  const doc = sourceEditor.getDoc()
+  if (line < 0 || line >= doc.lineCount()) return
+  sourceEditor.setCursor({ line, ch: 0 })
+  sourceEditor.scrollIntoView({ line, ch: 0 }, 120)
+  sourceEditor.focus()
+}
+
+els.btnSearch.addEventListener('click', () => (els.searchBar.hidden ? openSearch() : closeSearch()))
+els.btnSearchClose.addEventListener('click', closeSearch)
+
+els.searchInput.addEventListener('input', () => {
+  clearTimeout(searchTimer)
+  searchTimer = setTimeout(runSearch, 250)
+})
+
+els.searchInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') {
+    e.preventDefault()
+    clearTimeout(searchTimer)
+    runSearch()
+  }
+  if (e.key === 'Escape') closeSearch()
+})
+
+// ---------------------------------------------------------------- AI 引用跳转
+
+/**
+ * 回答里的行内代码如果能在当前文档里原样找到，就做成可点击的跳转。
+ *
+ * 刻意不用「让模型输出行号」的方案 —— 大模型数行号并不可靠。
+ * 直接拿原文片段回文档里搜，既准确又不需要改提示词。
+ */
+function linkifyAiCode(container) {
+  const tab = activeTab()
+  if (!tab) return
+
+  const content = tab.doc.getValue()
+  for (const code of container.querySelectorAll('code')) {
+    if (code.closest('pre')) continue
+    const text = code.textContent.trim()
+    if (text.length < 3) continue
+    if (!content.includes(text)) continue
+
+    code.classList.add('ai-ref')
+    code.dataset.quote = text
+    code.title = '点击定位到文档里的位置'
+  }
+}
+
+function jumpToQuote(quote) {
+  const tab = activeTab()
+  if (!tab) return
+
+  const idx = tab.doc.getValue().indexOf(quote)
+  if (idx === -1) return
+
+  showRightPane('source')
+  revealLine(tab.doc.posFromIndex(idx).line)
+}
+
+els.aiMessages.addEventListener('click', (e) => {
+  const ref = e.target.closest('.ai-ref')
+  if (!ref || !ref.dataset.quote) return
+  e.preventDefault()
+  jumpToQuote(ref.dataset.quote)
+})
+
 // ---------------------------------------------------------------- 启动自检
 
 /** 页面用到的全部接口。服务端少任何一个，就说明它是个旧进程 */
@@ -1704,6 +2400,11 @@ const REQUIRED_ROUTES = [
   'POST /api/dir',
   'POST /api/rename',
   'DELETE /api/entry',
+  'POST /api/reveal',
+  'GET /api/search',
+  'GET /api/asset',
+  'GET /api/watch',
+  'POST /api/watch',
   'GET /api/ai/config',
   'POST /api/ai/config',
   'POST /api/ai/chat'
@@ -1740,6 +2441,10 @@ async function checkServerVersion() {
 // ---------------------------------------------------------------- 启动
 
 checkServerVersion()
+
+applyTheme(readPref(PREF_KEYS.theme, 'light'))
+setAutosave(autosaveEnabled)
+connectWatcher()
 
 showEmptyState()
 showRightPane('source')
