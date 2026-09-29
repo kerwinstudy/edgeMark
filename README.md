@@ -300,6 +300,23 @@ EDGEMARK_CONFIG=/tmp/test-config.json npm start
   文档里本来就可能含 ` ``` `，用围栏会被提前截断。
 - 服务只监听 `127.0.0.1`，不对外暴露。
 
+## 许可证
+
+[MIT](LICENSE)。
+
+`public/vendor/` 下的第三方资源全部是 **MIT**，与本项目兼容：
+
+| 资源 | 许可证 |
+| --- | --- |
+| Vditor（左侧所见即所得编辑器） | MIT |
+| CodeMirror 5（右侧源码面板） | MIT |
+| markdown-it | MIT |
+| Prism | MIT |
+| github-markdown-css | MIT |
+
+其中 CodeMirror、github-markdown-css、Prism 是从本机 MarkText 的 `app.asar` 里取的
+（MarkText 本身也是 MIT）。
+
 ## 当前范围
 
 已经做到：
